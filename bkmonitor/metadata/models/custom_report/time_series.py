@@ -2002,6 +2002,7 @@ class TimeSeriesMetric(models.Model):
             if matched:
                 # 如果匹配到分组，则更新维度配置，并返回 scope_id
                 # 注意：涉及 bulk_refresh_ts_metrics 相关流程，需要支持 service_name 格式
+                # todo hhh 复用优化
                 scope_name_obj = ScopeName(field_scope)
                 # 构建未分组的 scope_name：保留前面的层级，最后一级设为空
                 if scope_name_obj.levels:
@@ -2103,6 +2104,28 @@ class TimeSeriesMetric(models.Model):
         return True
 
     @classmethod
+    def _build_field_scope_dimensions_index(
+        cls,
+        metric_info: dict,
+        metric_group_dimensions: dict | None,
+    ) -> dict[str, list]:
+        """预构建 field_scope 到 dimensions 的索引映射
+
+        :param metric_info: 指标信息字典
+        :param metric_group_dimensions: 指标分组维度配置
+        :return: field_scope -> dimensions 的映射字典
+        """
+        scope_dimensions_index = {}
+        for group_key, group_info in metric_info.get("group_dimensions", {}).items():
+            extracted_scope = cls._extract_field_scope_from_group_key(group_key, metric_group_dimensions)
+            dimensions = group_info.get("dimensions", [])
+            # 维度 [target] 必须存在; 如果不存在时，则需要添加 [target] 维度
+            if cls.TARGET_DIMENSION_NAME not in dimensions:
+                dimensions.append(cls.TARGET_DIMENSION_NAME)
+            scope_dimensions_index[extracted_scope] = dimensions
+        return scope_dimensions_index
+
+    @classmethod
     def _create_metrics_with_combinations(
         cls,
         metrics_dict: dict,
@@ -2127,6 +2150,10 @@ class TimeSeriesMetric(models.Model):
         ts_group = TimeSeriesGroup.objects.filter(time_series_group_id=group_id).first()
         metric_group_dimensions = ts_group.metric_group_dimensions if ts_group else None
 
+        # 预构建所有指标的 field_scope -> dimensions 索引，避免重复遍历
+        # 时间复杂度优化：从 O(n×m) 降低到 O(n+m)
+        field_scope_index_cache = {}
+
         for field_name, field_scope in need_create_metrics:
             metric_info = metrics_dict.get(field_name)
             # 如果获取不到指标数据，则跳过
@@ -2136,30 +2163,29 @@ class TimeSeriesMetric(models.Model):
             if not metric_info.get("is_active", True) and not is_auto_discovery:
                 continue
 
-            for group_key, group_info in metric_info["group_dimensions"].items():
-                extracted_scope = cls._extract_field_scope_from_group_key(group_key, metric_group_dimensions)
-                # 只创建匹配的 field_scope
-                if extracted_scope != field_scope:
-                    continue
+            # 使用缓存的索引，避免重复构建
+            if field_name not in field_scope_index_cache:
+                field_scope_index_cache[field_name] = cls._build_field_scope_dimensions_index(
+                    metric_info, metric_group_dimensions
+                )
 
-                dimensions = group_info.get("dimensions", [])
+            # 直接从索引中获取维度列表，O(1) 时间复杂度
+            dimensions = field_scope_index_cache[field_name].get(field_scope)
+            if dimensions is None:
+                continue
 
-                # 维度 [target] 必须存在; 如果不存在时，则需要添加 [target] 维度
-                if cls.TARGET_DIMENSION_NAME not in dimensions:
-                    dimensions.append(cls.TARGET_DIMENSION_NAME)
+            params = {
+                "field_name": field_name,
+                "group_id": group_id,
+                "table_id": f"{table_id.split('.')[0]}.{field_name}",
+                "tag_list": dimensions,
+                "field_scope": field_scope,
+            }
+            logger.info("create ts metric data with group_dimensions: %s", json.dumps(params))
+            records.append(cls(**params))
 
-                params = {
-                    "field_name": field_name,
-                    "group_id": group_id,
-                    "table_id": f"{table_id.split('.')[0]}.{field_name}",
-                    "tag_list": dimensions,
-                    "field_scope": field_scope,
-                }
-                logger.info("create ts metric data with group_dimensions: %s", json.dumps(params))
-                records.append(cls(**params))
-
-                # 收集该 scope 的所有维度（使用 set 去重）
-                scope_dimensions_map.setdefault(field_scope, set()).update(dimensions)
+            # 收集该 scope 的所有维度（使用 set 去重）
+            scope_dimensions_map.setdefault(field_scope, set()).update(dimensions)
 
         return records, scope_dimensions_map
 
@@ -2302,6 +2328,10 @@ class TimeSeriesMetric(models.Model):
         ts_group = TimeSeriesGroup.objects.filter(time_series_group_id=group_id).first()
         metric_group_dimensions = ts_group.metric_group_dimensions if ts_group else None
 
+        # 预构建所有指标的 field_scope -> dimensions 索引，避免重复遍历
+        # 时间复杂度优化：从 O(n×m) 降低到 O(n+m)
+        field_scope_index_cache = {}
+
         for obj in qs_objs:
             # 只处理匹配的 (field_name, field_scope) 组合
             if (obj.field_name, obj.field_scope) not in combinations_set:
@@ -2324,19 +2354,16 @@ class TimeSeriesMetric(models.Model):
                     datetime.datetime.fromtimestamp(metric_info.get("last_modify_time", time.time()))
                 )
 
-            # 从 group_dimensions 中根据 field_scope 获取维度
-            new_dimensions = []
-            for group_key, group_info in metric_info.get("group_dimensions", {}).items():
-                extracted_scope = cls._extract_field_scope_from_group_key(group_key, metric_group_dimensions)
-                # 只处理匹配的 field_scope
-                if extracted_scope != obj.field_scope:
-                    continue
-                new_dimensions = group_info.get("dimensions", [])
-                break
+            # 使用缓存的索引，避免重复构建
+            if obj.field_name not in field_scope_index_cache:
+                field_scope_index_cache[obj.field_name] = cls._build_field_scope_dimensions_index(
+                    metric_info, metric_group_dimensions
+                )
 
-            # 维度 [target] 必须存在; 如果不存在时，则需要添加 [target] 维度
-            if cls.TARGET_DIMENSION_NAME not in new_dimensions:
-                new_dimensions.append(cls.TARGET_DIMENSION_NAME)
+            # 直接从索引中获取维度列表，O(1) 时间复杂度
+            new_dimensions = field_scope_index_cache[obj.field_name].get(obj.field_scope)
+            if new_dimensions is None:
+                continue
 
             need_push_router = cls._collect_update_records(
                 last_modify_time, need_push_router, new_dimensions, obj, records
