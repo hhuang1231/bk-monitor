@@ -459,8 +459,7 @@ class VMStorageBindingConfig(DataLinkResourceConfigBase):
         from metadata.models.custom_report.time_series import TimeSeriesGroup
 
         ts_group = TimeSeriesGroup.objects.filter(bk_data_id=bk_data_id, is_delete=False).first()
-        if ts_group and ts_group.has_multi_level_grouping:
-            # 使用列表格式，按 index 排序
+        if ts_group and ts_group.metric_group_dimensions:
             render_params["metric_group_dimensions"] = json.dumps(ts_group.metric_group_dimensions_list)
             render_params["dd_version"] = "v2"
 

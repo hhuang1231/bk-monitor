@@ -219,11 +219,6 @@ class TimeSeriesGroup(CustomGroupBase):
     STORAGE_EVENT_NAME_OPTION = {}
 
     @property
-    def has_multi_level_grouping(self) -> bool:
-        """判断是否使用多级分组"""
-        return bool(self.metric_group_dimensions)
-
-    @property
     def metric_group_dimensions_list(self) -> list[str]:
         """获取 metric_group_dimensions 列表格式（按 index 排序）"""
         if not self.metric_group_dimensions:
@@ -592,7 +587,7 @@ class TimeSeriesGroup(CustomGroupBase):
             "values": BCSClusterInfo.DEFAULT_SERVICE_MONITOR_DIMENSION_TERM,
         }
         # 如果是 APM 场景，使用 v2 版本的 API
-        if self.has_multi_level_grouping:
+        if self.metric_group_dimensions:
             params["version"] = "v2"
 
         data = api.bkdata.query_metric_and_dimension(**params) or []
