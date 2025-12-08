@@ -245,6 +245,16 @@ class TimeSeriesGroup(CustomGroupBase):
         """判断是否使用多级分组"""
         return bool(self.metric_group_dimensions_dict)
 
+    @property
+    def metric_group_dimensions_list(self) -> list[str]:
+        """获取 metric_group_dimensions 列表格式（按 index 排序）"""
+        dims_dict = self.metric_group_dimensions_dict
+        if not dims_dict:
+            return []
+        # 按照 index 排序，然后提取维度名称
+        sorted_dims = sorted(dims_dict.items(), key=lambda x: x[1].get("index", 0))
+        return [dim_name for dim_name, _ in sorted_dims]
+
     STORAGE_FIELD_LIST = [
         {
             "field_name": "target",
