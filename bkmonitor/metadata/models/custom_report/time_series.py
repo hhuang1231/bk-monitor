@@ -127,12 +127,12 @@ class ScopeName:
         """从层级列表创建 ScopeName"""
         if not levels:
             return cls(cls.UNGROUPED)
-        # 过滤空值，但保留末尾的空值（表示未分组）
+        # 过滤空值，不允许任何一级为空
         filtered_levels = []
         for i, level in enumerate(levels):
-            if level or i == len(levels) - 1:  # 最后一级允许为空
-                # todo hhh 此处不允许最后一级为空
-                filtered_levels.append(level or cls.UNGROUPED)
+            if not level:
+                raise ValueError(_("分组层级不能为空，请确认后重试"))
+            filtered_levels.append(level)
         return cls(cls.SEPARATOR.join(filtered_levels))
 
     @classmethod
@@ -148,8 +148,7 @@ class ScopeName:
         :return: ScopeName 对象
         """
         if not group_key:
-            # todo hhh 不存在直接报错
-            return cls(cls.UNGROUPED)
+            raise ValueError(_("group_key 不能为空，请确认后重试"))
 
         # 解析 group_key
         parts = group_key.split(cls.SEPARATOR)
@@ -159,10 +158,9 @@ class ScopeName:
                 key, value = part.split(":", 1)
                 key_value_map[key.strip()] = value.strip() if value.strip() else None
 
-        # 如果没有配置 metric_group_dimensions，返回未分组
+        # 如果没有配置 metric_group_dimensions，抛出异常
         if not metric_group_dimensions:
-            # todo hhh 直接报错
-            return cls(cls.UNGROUPED)
+            raise ValueError(_("metric_group_dimensions 不能为空，请确认后重试"))
 
         # 按照 index 排序获取值
         sorted_dims = sorted(metric_group_dimensions.items(), key=lambda x: x[1].get("index", 0))
