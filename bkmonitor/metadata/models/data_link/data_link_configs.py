@@ -459,8 +459,8 @@ class VMStorageBindingConfig(DataLinkResourceConfigBase):
         from metadata.models.custom_report.time_series import TimeSeriesGroup
 
         ts_group = TimeSeriesGroup.objects.filter(bk_data_id=bk_data_id, is_delete=False).first()
-        if ts_group and ts_group.metric_group_dimensions:
-            render_params["metric_group_dimensions"] = json.dumps(ts_group.metric_group_dimensions)
+        if ts_group and ts_group.has_multi_level_grouping:
+            render_params["metric_group_dimensions"] = json.dumps(ts_group.metric_group_dimensions_dict)
             render_params["dd_version"] = "v2"
 
         # 现阶段仅在多租户模式下添加tenant字段
