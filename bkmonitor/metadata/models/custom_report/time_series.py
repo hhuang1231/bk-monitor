@@ -1959,6 +1959,23 @@ class TimeSeriesMetric(models.Model):
         scope_name_obj = ScopeName.from_group_key(group_key, metric_group_dimensions)
         return scope_name_obj.to_field_scope()
 
+    @staticmethod
+    def get_ungroup_scope(group_id: int, field_scope: str) -> "TimeSeriesScope | None":
+        """获取未分组的 scope 对象
+
+        :param group_id: 分组ID
+        :param field_scope: 指标的 field_scope
+        :return: (未分组的 TimeSeriesScope 对象或 None, ungroup_scope_name)
+        """
+        scope_name_obj = ScopeName(field_scope)
+        # 构建未分组的 scope_name：保留前面的层级，最后一级设为空
+        if scope_name_obj.levels:
+            ungroup_scope_name = ScopeName.SEPARATOR.join(scope_name_obj.levels[:-1] + [UNGROUP_SCOPE_NAME])
+        else:
+            ungroup_scope_name = UNGROUP_SCOPE_NAME
+        ungroup_scope = TimeSeriesScope.objects.filter(group_id=group_id, scope_name=ungroup_scope_name).first()
+        return ungroup_scope
+
     @classmethod
     def get_scope_id_for_metric(cls, group_id: int, field_scope: str, field_name: str) -> int | None:
         """获取指标对应的 scope_id
@@ -2002,14 +2019,7 @@ class TimeSeriesMetric(models.Model):
             if matched:
                 # 如果匹配到分组，则更新维度配置，并返回 scope_id
                 # 注意：涉及 bulk_refresh_ts_metrics 相关流程，需要支持 service_name 格式
-                # todo hhh 复用优化
-                scope_name_obj = ScopeName(field_scope)
-                # 构建未分组的 scope_name：保留前面的层级，最后一级设为空
-                if scope_name_obj.levels:
-                    ungroup_scope_name = ScopeName.SEPARATOR.join(scope_name_obj.levels[:-1] + [UNGROUP_SCOPE_NAME])
-                else:
-                    ungroup_scope_name = UNGROUP_SCOPE_NAME
-                ungroup_scope = TimeSeriesScope.objects.filter(group_id=group_id, scope_name=ungroup_scope_name).first()
+                ungroup_scope = cls.get_ungroup_scope(group_id, field_scope)
 
                 if ungroup_scope:
                     ungroup_metric = TimeSeriesMetric.objects.filter(
@@ -2036,17 +2046,10 @@ class TimeSeriesMetric(models.Model):
 
         # 如果没有匹配的分组，返回未分组的 scope_id
         # 注意：此方法用于 bulk_refresh_ts_metrics 相关流程，需要支持 service_name 格式
-        scope_name_obj = ScopeName(field_scope)
-        # 构建未分组的 scope_name：保留前面的层级，最后一级设为空
-        if scope_name_obj.levels:
-            ungroup_scope_name = ScopeName.SEPARATOR.join(scope_name_obj.levels[:-1] + [UNGROUP_SCOPE_NAME])
-        else:
-            ungroup_scope_name = UNGROUP_SCOPE_NAME
-
-        ungroup_scope = TimeSeriesScope.objects.filter(group_id=group_id, scope_name=ungroup_scope_name).first()
+        ungroup_scope = cls.get_ungroup_scope(group_id, field_scope)
 
         if not ungroup_scope:
-            logger.warning(f"Ungroup scope not found: group_id={group_id}, ungroup_scope_name={ungroup_scope_name}")
+            logger.warning(f"Ungroup scope not found: group_id={group_id}")
         return ungroup_scope.id if ungroup_scope else None
 
     @classmethod
