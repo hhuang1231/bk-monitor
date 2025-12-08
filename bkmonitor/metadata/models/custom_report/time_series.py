@@ -1194,7 +1194,7 @@ class TimeSeriesScope(models.Model):
     def is_default_scope(scope_name: str) -> bool:
         """判断 scope_name 是否为 default 分组
         :return: 如果是 default 分组返回 True，否则返回 False
-
+        todo hhh 修改
         注意：此方法用于 bulk_refresh_ts_metrics 相关流程，需要支持 service_name||default 格式
         """
         return scope_name == TimeSeriesMetric.DEFAULT_SCOPE or scope_name.endswith(
@@ -1307,6 +1307,7 @@ class TimeSeriesScope(models.Model):
             return
 
         # 构建 scope_name 映射：原始名称 -> 数据库存储名称
+        # todo hhh 修改
         # 注意：此方法用于 bulk_refresh_ts_metrics 相关流程，需要支持 service_name 格式
         scope_name_mapping = {}
         for scope_name in scope_dimensions_map.keys():
@@ -1838,7 +1839,6 @@ class TimeSeriesMetric(models.Model):
     # 关联到 TimeSeriesScope 的主键 id，用于标识指标所属的分组
     scope_id = models.IntegerField(verbose_name="时序分组ID", null=True, blank=True, db_index=True)
     table_id = models.CharField(verbose_name="table名", default="", max_length=255)
-    # 对于 APM 的场景来说分组的格式为 {service_name}||{scope_name}，其余场景中都是自动赋值为 default
     field_scope = models.CharField(
         verbose_name="指标字段数据分组名", default=DEFAULT_SCOPE, max_length=255, db_collation="utf8_bin"
     )
@@ -1952,9 +1952,6 @@ class TimeSeriesMetric(models.Model):
         特殊处理：
         - 如果 service_name 不存在或值为空，使用 "unknown_service"
         - 如果 scope_name 不存在或值为空，使用 "default"
-        - 如果最后一级为空，表示未分组
-
-        注意：此方法用于 bulk_refresh_ts_metrics 相关流程，需要支持 service_name 格式
         """
         scope_name_obj = ScopeName.from_group_key(group_key, metric_group_dimensions)
         return scope_name_obj.to_field_scope()
@@ -2018,7 +2015,6 @@ class TimeSeriesMetric(models.Model):
 
             if matched:
                 # 如果匹配到分组，则更新维度配置，并返回 scope_id
-                # 注意：涉及 bulk_refresh_ts_metrics 相关流程，需要支持 service_name 格式
                 ungroup_scope = cls.get_ungroup_scope(group_id, field_scope)
 
                 if ungroup_scope:
@@ -2045,7 +2041,6 @@ class TimeSeriesMetric(models.Model):
                 return scope.id
 
         # 如果没有匹配的分组，返回未分组的 scope_id
-        # 注意：此方法用于 bulk_refresh_ts_metrics 相关流程，需要支持 service_name 格式
         ungroup_scope = cls.get_ungroup_scope(group_id, field_scope)
 
         if not ungroup_scope:
