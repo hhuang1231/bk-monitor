@@ -157,11 +157,9 @@ class ScopeName:
                 key, value = part.split(":", 1)
                 key_value_map[key.strip()] = value.strip() if value.strip() else None
 
-        # 如果没有配置 metric_group_dimensions，使用旧逻辑
+        # 如果没有配置 metric_group_dimensions，返回未分组
         if not metric_group_dimensions:
-            service_name = key_value_map.get("service_name") or TimeSeriesMetric.DEFAULT_SERVICE
-            scope_name = key_value_map.get("scope_name") or TimeSeriesMetric.DEFAULT_SCOPE
-            return cls(f"{service_name}{cls.SEPARATOR}{scope_name}")
+            return cls(cls.UNGROUPED)
 
         # 按照 index 排序获取值
         sorted_dims = sorted(metric_group_dimensions.items(), key=lambda x: x[1].get("index", 0))
@@ -222,22 +220,9 @@ class TimeSeriesGroup(CustomGroupBase):
 
     @property
     def metric_group_dimensions_dict(self) -> dict:
-        """获取 metric_group_dimensions 字典格式（兼容旧格式）"""
+        """获取 metric_group_dimensions 字典格式"""
         if not self.metric_group_dimensions:
             return {}
-
-        # 如果是列表格式（旧格式），转换为新格式
-        if isinstance(self.metric_group_dimensions, list):
-            result = {}
-            for index, dim_name in enumerate(self.metric_group_dimensions):
-                default_value = ""
-                if dim_name == "service_name":
-                    default_value = TimeSeriesMetric.DEFAULT_SERVICE
-                elif dim_name == "scope_name":
-                    default_value = TimeSeriesMetric.DEFAULT_SCOPE
-                result[dim_name] = {"index": index, "default_value": default_value}
-            return result
-
         return self.metric_group_dimensions
 
     @property
@@ -809,7 +794,7 @@ class TimeSeriesGroup(CustomGroupBase):
         default_storage_config=None,
         additional_options: dict | None = None,
         data_label: str | None = None,
-        metric_group_dimensions: list[str] | dict | None = None,
+        metric_group_dimensions: dict | None = None,
     ):
         """
         创建一个新的自定义分组记录
@@ -856,25 +841,11 @@ class TimeSeriesGroup(CustomGroupBase):
 
     @classmethod
     def _post_process_create(cls, custom_group, kwargs):
-        """后处理创建，转换 metric_group_dimensions 格式"""
+        """后处理创建"""
         metric_group_dimensions = kwargs.get("metric_group_dimensions")
-        if not metric_group_dimensions:
-            return
-
-        # 如果是列表格式（旧格式），转换为新格式
-        if isinstance(metric_group_dimensions, list):
-            converted = {}
-            for index, dim_name in enumerate(metric_group_dimensions):
-                default_value = ""
-                if dim_name == "service_name":
-                    default_value = TimeSeriesMetric.DEFAULT_SERVICE
-                elif dim_name == "scope_name":
-                    default_value = TimeSeriesMetric.DEFAULT_SCOPE
-                converted[dim_name] = {"index": index, "default_value": default_value}
-            custom_group.metric_group_dimensions = converted
-        else:
+        if metric_group_dimensions:
             custom_group.metric_group_dimensions = metric_group_dimensions
-        custom_group.save()
+            custom_group.save()
 
     @atomic(config.DATABASE_CONNECTION_NAME)
     def modify_time_series_group(
