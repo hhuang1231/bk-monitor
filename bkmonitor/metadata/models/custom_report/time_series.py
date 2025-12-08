@@ -219,25 +219,17 @@ class TimeSeriesGroup(CustomGroupBase):
     STORAGE_EVENT_NAME_OPTION = {}
 
     @property
-    def metric_group_dimensions_dict(self) -> dict:
-        """获取 metric_group_dimensions 字典格式"""
-        if not self.metric_group_dimensions:
-            return {}
-        return self.metric_group_dimensions
-
-    @property
     def has_multi_level_grouping(self) -> bool:
         """判断是否使用多级分组"""
-        return bool(self.metric_group_dimensions_dict)
+        return bool(self.metric_group_dimensions)
 
     @property
     def metric_group_dimensions_list(self) -> list[str]:
         """获取 metric_group_dimensions 列表格式（按 index 排序）"""
-        dims_dict = self.metric_group_dimensions_dict
-        if not dims_dict:
+        if not self.metric_group_dimensions:
             return []
         # 按照 index 排序，然后提取维度名称
-        sorted_dims = sorted(dims_dict.items(), key=lambda x: x[1].get("index", 0))
+        sorted_dims = sorted(self.metric_group_dimensions.items(), key=lambda x: x[1].get("index", 0))
         return [dim_name for dim_name, _ in sorted_dims]
 
     STORAGE_FIELD_LIST = [
@@ -2135,7 +2127,7 @@ class TimeSeriesMetric(models.Model):
 
         # 获取 metric_group_dimensions 配置
         ts_group = TimeSeriesGroup.objects.filter(time_series_group_id=group_id).first()
-        metric_group_dimensions = ts_group.metric_group_dimensions_dict if ts_group else None
+        metric_group_dimensions = ts_group.metric_group_dimensions if ts_group else None
 
         for field_name, field_scope in need_create_metrics:
             metric_info = metrics_dict.get(field_name)
@@ -2310,7 +2302,7 @@ class TimeSeriesMetric(models.Model):
 
         # 获取 metric_group_dimensions 配置
         ts_group = TimeSeriesGroup.objects.filter(time_series_group_id=group_id).first()
-        metric_group_dimensions = ts_group.metric_group_dimensions_dict if ts_group else None
+        metric_group_dimensions = ts_group.metric_group_dimensions if ts_group else None
 
         for obj in qs_objs:
             # 只处理匹配的 (field_name, field_scope) 组合
@@ -2498,7 +2490,7 @@ class TimeSeriesMetric(models.Model):
 
             # 获取 metric_group_dimensions 配置
             ts_group = TimeSeriesGroup.objects.filter(time_series_group_id=group_id).first()
-            metric_group_dimensions = ts_group.metric_group_dimensions_dict if ts_group else None
+            metric_group_dimensions = ts_group.metric_group_dimensions if ts_group else None
 
             # 构建期望的 (field_name, field_scope) 组合
             expected_combinations = set()
