@@ -1942,8 +1942,8 @@ class TimeSeriesMetric(models.Model):
         tags.add("target")
         return list(tags)
 
-    @classmethod
-    def _extract_field_scope_from_group_key(cls, group_key: str, metric_group_dimensions: dict | None = None) -> str:
+    @staticmethod
+    def _extract_field_scope_from_group_key(group_key: str, metric_group_dimensions: dict | None = None) -> str:
         """从 group_dimensions 的 key 中提取 field_scope
 
         例如: "service_name:api-server||scope_name:production" -> "api-server||production"
