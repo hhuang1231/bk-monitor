@@ -131,6 +131,7 @@ class ScopeName:
         filtered_levels = []
         for i, level in enumerate(levels):
             if level or i == len(levels) - 1:  # 最后一级允许为空
+                # todo hhh 此处不允许最后一级为空
                 filtered_levels.append(level or cls.UNGROUPED)
         return cls(cls.SEPARATOR.join(filtered_levels))
 
@@ -147,6 +148,7 @@ class ScopeName:
         :return: ScopeName 对象
         """
         if not group_key:
+            # todo hhh 不存在直接报错
             return cls(cls.UNGROUPED)
 
         # 解析 group_key
@@ -159,6 +161,7 @@ class ScopeName:
 
         # 如果没有配置 metric_group_dimensions，返回未分组
         if not metric_group_dimensions:
+            # todo hhh 直接报错
             return cls(cls.UNGROUPED)
 
         # 按照 index 排序获取值
@@ -1861,7 +1864,7 @@ class TimeSeriesMetric(models.Model):
 
     @staticmethod
     def get_default_scope_metric_filter(scope_name: str):
-        """获取默认 scope 的指标过滤器
+        """获取默认 scope 的指标过滤器 todo hhh 需要支持最后一级的默认值进行过滤
 
         注意：此方法用于 bulk_refresh_ts_metrics 相关流程，需要支持 service_name 格式
         """
@@ -2474,44 +2477,44 @@ class TimeSeriesMetric(models.Model):
         """
         _metrics_dict = {m["field_name"]: m for m in metric_info_list if m.get("field_name")}
 
-        # 检查是否有 group_dimensions 格式的数据
-        has_group_dimensions = any("group_dimensions" in m for m in metric_info_list if m.get("field_name"))
+        # 统一逻辑：基于 (field_name, field_scope) 组合判断
+        # 获取现有的 (field_name, field_scope) 组合
+        existing_records = cls.objects.filter(group_id=group_id).values_list("field_name", "field_scope")
+        existing_combinations = {(field_name, field_scope) for field_name, field_scope in existing_records}
 
-        if has_group_dimensions:
-            # 新逻辑：基于 (field_name, field_scope) 组合判断
-            # 获取现有的 (field_name, field_scope) 组合
-            existing_records = cls.objects.filter(group_id=group_id).values_list("field_name", "field_scope")
-            existing_combinations = {(field_name, field_scope) for field_name, field_scope in existing_records}
+        # 获取 metric_group_dimensions 配置
+        ts_group = TimeSeriesGroup.objects.filter(time_series_group_id=group_id).first()
+        metric_group_dimensions = ts_group.metric_group_dimensions if ts_group else None
 
-            # 获取 metric_group_dimensions 配置
-            ts_group = TimeSeriesGroup.objects.filter(time_series_group_id=group_id).first()
-            metric_group_dimensions = ts_group.metric_group_dimensions if ts_group else None
+        # 构建期望的 (field_name, field_scope) 组合
+        expected_combinations = set()
+        has_group_dimensions = False
+        for metric_info in metric_info_list:
+            field_name = metric_info.get("field_name")
+            if not field_name:
+                continue
+            if "group_dimensions" in metric_info:
+                has_group_dimensions = True
+                for group_key in metric_info["group_dimensions"].keys():
+                    field_scope = cls._extract_field_scope_from_group_key(group_key, metric_group_dimensions)
+                    expected_combinations.add((field_name, field_scope))
+            else:
+                # 旧格式，使用默认的 field_scope
+                expected_combinations.add((field_name, "default"))
 
-            # 构建期望的 (field_name, field_scope) 组合
-            expected_combinations = set()
-            for metric_info in metric_info_list:
-                field_name = metric_info.get("field_name")
-                if not field_name:
-                    continue
-                if "group_dimensions" in metric_info:
-                    for group_key in metric_info["group_dimensions"].keys():
-                        field_scope = cls._extract_field_scope_from_group_key(group_key, metric_group_dimensions)
-                        expected_combinations.add((field_name, field_scope))
-                else:
-                    # 旧格式，使用默认的 field_scope
-                    expected_combinations.add((field_name, "default"))
+        # 计算需要创建和更新的记录
+        need_create_combinations = expected_combinations - existing_combinations
+        need_update_combinations = expected_combinations & existing_combinations
+        logger.info(
+            f"need_create_combinations: {need_create_combinations}, need_update_combinations: {need_update_combinations}"
+        )
 
-            # 计算需要创建和更新的记录
-            need_create_combinations = expected_combinations - existing_combinations
-            need_update_combinations = expected_combinations & existing_combinations
-            logger.info(
-                f"need_create_combinations: {need_create_combinations}, need_update_combinations: {need_update_combinations}"
-            )
-
-            # NOTE: 针对创建或者时间变动时，推送路由数据
-            need_push_router = False
-            # 如果存在，则批量创建（传递完整的 combinations）
-            if need_create_combinations:
+        # NOTE: 针对创建或者时间变动时，推送路由数据
+        need_push_router = False
+        # 如果存在，则批量创建
+        if need_create_combinations:
+            if has_group_dimensions:
+                # 新格式：传递完整的 combinations
                 need_push_router = cls._bulk_create_metrics(
                     _metrics_dict,
                     group_id,
@@ -2519,27 +2522,22 @@ class TimeSeriesMetric(models.Model):
                     is_auto_discovery,
                     need_create_metrics_with_scope=need_create_combinations,
                 )
-            # 批量更新（传递完整的 combinations）
-            if need_update_combinations:
-                need_push_router |= cls._bulk_update_metrics(
-                    _metrics_dict, group_id, is_auto_discovery, need_update_metrics_with_scope=need_update_combinations
-                )
-        else:
-            # 旧逻辑：仅基于 field_name 判断
-            metrics_by_group_id = cls.objects.filter(group_id=group_id).values_list("field_name", flat=True)
-            _metrics = set(_metrics_dict.keys())
-            need_create_metrics = _metrics - set(metrics_by_group_id)
-            need_update_metrics = _metrics - need_create_metrics
-
-            # NOTE: 针对创建或者时间变动时，推送路由数据
-            need_push_router = False
-            # 如果存在，则批量创建
-            if need_create_metrics:
+            else:
+                # 旧格式：只传递 field_name
+                need_create_metrics = {field_name for field_name, _ in need_create_combinations}
                 need_push_router = cls._bulk_create_metrics(
                     _metrics_dict, group_id, table_id, is_auto_discovery, need_create_metrics=need_create_metrics
                 )
-            # 批量更新
-            if need_update_metrics:
+        # 批量更新
+        if need_update_combinations:
+            if has_group_dimensions:
+                # 新格式：传递完整的 combinations
+                need_push_router |= cls._bulk_update_metrics(
+                    _metrics_dict, group_id, is_auto_discovery, need_update_metrics_with_scope=need_update_combinations
+                )
+            else:
+                # 旧格式：只传递 field_name
+                need_update_metrics = {field_name for field_name, _ in need_update_combinations}
                 need_push_router |= cls._bulk_update_metrics(
                     _metrics_dict, group_id, is_auto_discovery, need_update_metrics=need_update_metrics
                 )
