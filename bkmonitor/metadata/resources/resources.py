@@ -1413,13 +1413,6 @@ class QueryTimeSeriesGroupResource(Resource):
         return list(chain.from_iterable(instance.to_json_v2() for instance in query_set))
 
 
-class ScopeSerializer(serializers.Serializer):
-    """Scope信息序列化器"""
-
-    id = serializers.IntegerField(label="Scope ID")
-    name = serializers.CharField(label="Scope名称")
-
-
 class CreateOrUpdateTimeSeriesMetricResource(Resource):
     """批量创建或更新自定义时序指标"""
 
