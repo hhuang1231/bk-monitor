@@ -1445,7 +1445,40 @@ class CreateOrUpdateTimeSeriesMetricResource(Resource):
         group_id = validated_request_data.pop("group_id")
         metrics = validated_request_data.pop("metrics")
 
-        models.TimeSeriesMetric.batch_create_or_update(metrics, bk_tenant_id, group_id)
+        result = models.TimeSeriesMetric.batch_create_or_update(metrics, bk_tenant_id, group_id)
+
+        all_metrics = result["created_metrics"] + result["updated_metrics"]
+
+        if not all_metrics:
+            return {"metrics": []}
+
+        # 批量获取scope信息
+        scope_ids = [m.scope_id for m in all_metrics if m.scope_id]
+        scopes = models.TimeSeriesScope.objects.filter(id__in=scope_ids, group_id=group_id).values("id", "scope_name")
+        scope_map = {scope["id"]: {"id": scope["id"], "name": scope["scope_name"]} for scope in scopes}
+
+        # 构建响应数据
+        results = []
+        for metric in all_metrics:
+            scope_info = None
+            if metric.scope_id:
+                scope_info = scope_map.get(metric.scope_id, {"id": metric.scope_id, "name": ""})
+
+            results.append(
+                {
+                    "field_id": metric.field_id,
+                    "field_name": metric.field_name,
+                    "field_scope": metric.field_scope,
+                    "scope": scope_info,
+                    "tag_list": metric.tag_list or [],
+                    "field_config": metric.field_config or {},
+                    "label": metric.label,
+                    "create_time": metric.create_time.timestamp() if metric.create_time else None,
+                    "update_time": metric.last_modify_time.timestamp() if metric.last_modify_time else None,
+                }
+            )
+
+        return {"metrics": results}
 
 
 class QueryTimeSeriesMetricResource(Resource):

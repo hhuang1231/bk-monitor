@@ -2379,12 +2379,16 @@ class TimeSeriesMetric(models.Model):
         scopes_dict[TimeSeriesMetric.DISABLE_SCOPE_ID] = None
 
         # 批量创建新指标
-        if metrics_to_create:
-            cls._batch_create_metrics(metrics_to_create, group_id, table_id, scopes_dict)
+        created_metrics = cls._batch_create_metrics(metrics_to_create, group_id, table_id, scopes_dict)
 
         # 批量更新现有指标
-        if metrics_to_update:
-            cls._batch_update_metrics(metrics_to_update, scopes_dict)
+        updated_metrics = cls._batch_update_metrics(metrics_to_update, scopes_dict)
+
+        # 返回创建和更新的指标对象
+        return {
+            "created_metrics": created_metrics,
+            "updated_metrics": updated_metrics,
+        }
 
     @classmethod
     def _batch_create_metrics(cls, metrics_to_create, group_id, table_id, scopes_dict):
@@ -2427,6 +2431,18 @@ class TimeSeriesMetric(models.Model):
         cls.objects.bulk_create(records_to_create, batch_size=BULK_CREATE_BATCH_SIZE)
 
         TimeSeriesScope.update_dimension_config_and_metrics_scope_id(scope_moves=scope_moves, need_update_metrics=False)
+
+        # 重新查询数据库，确保返回的对象包含field_id
+        # 使用(field_name, field_scope)组合来查询刚创建的指标
+        from django.db.models import Q
+
+        query = Q()
+        for metric_obj in records_to_create:
+            query |= Q(field_name=metric_obj.field_name, field_scope=metric_obj.field_scope)
+
+        created_metrics_with_id = list(cls.objects.filter(query, group_id=group_id))
+
+        return created_metrics_with_id
 
     @classmethod
     def _batch_update_metrics(cls, metrics_to_update, scopes_dict):
@@ -2479,6 +2495,8 @@ class TimeSeriesMetric(models.Model):
             cls.objects.bulk_update(records_to_update, updatable_fields, batch_size=BULK_UPDATE_BATCH_SIZE)
 
         TimeSeriesScope.update_dimension_config_and_metrics_scope_id(scope_moves=scope_moves)
+
+        return records_to_update
 
     @classmethod
     def _validate_field_name_conflicts(cls, metrics_to_create):
