@@ -1810,55 +1810,69 @@ class TimeSeriesMetric(models.Model):
         verbose_name = "自定义时序描述记录"
         verbose_name_plural = "自定义时序描述记录表"
 
+    class Builder:
+        def __init__(self, metric: "TimeSeriesMetric" = None):
+            self._metric = metric if metric is not None else TimeSeriesMetric()
+
+        def with_table_id_from_field_name(self, database_name: str, field_name: str) -> "TimeSeriesMetric.Builder":
+            self._metric.table_id = f"{database_name}.{field_name}"
+            self._metric.field_name = field_name
+            return self
+
+        def with_tag_list(self, tag_list: list) -> "TimeSeriesMetric.Builder":
+            tag_list = tag_list or []
+            if self._metric.TARGET_DIMENSION_NAME not in tag_list:
+                tag_list = tag_list + [self._metric.TARGET_DIMENSION_NAME]
+            self._metric.tag_list = tag_list
+            return self
+
+        def with_field_config(self, field_config: dict) -> "TimeSeriesMetric.Builder":
+            self._metric.field_config = field_config or {}
+            return self
+
+        def with_label(self, label: str) -> "TimeSeriesMetric.Builder":
+            self._metric.label = label or ""
+            return self
+
+        def with_scope(self, scope: "TimeSeriesScope") -> "TimeSeriesMetric.Builder":
+            if scope is None:
+                raise ValueError("指标分组不能为空")
+            self._metric.scope_id = scope.id
+            return self
+
+        def with_scope_by_id(self, scope_id: int, scopes_dict: dict) -> "TimeSeriesMetric.Builder":
+            scope = scopes_dict.get(scope_id)
+            if scope is None:
+                raise ValueError(f"指标分组不存在，请确认后重试。分组ID: {scope_id}")
+            self._metric.scope_id = scope.id
+            return self
+
+        def with_field_scope(self, field_scope: str = None) -> "TimeSeriesMetric.Builder":
+            self._metric.field_scope = field_scope or self._metric.DEFAULT_DATA_SCOPE_NAME
+            return self
+
+        def with_group_id(self, group_id: int) -> "TimeSeriesMetric.Builder":
+            self._metric.group_id = group_id
+            return self
+
+        def with_disabled_state_handled(self) -> "TimeSeriesMetric.Builder":
+            field_config = self._metric.field_config or {}
+            if field_config.get("disabled", False):
+                self._metric.scope_id = self._metric.DISABLE_SCOPE_ID
+            return self
+
+        def with_updated_modify_time(self) -> "TimeSeriesMetric.Builder":
+            self._metric.last_modify_time = tz_now()
+            return self
+
+        def build(self) -> "TimeSeriesMetric":
+            return self._metric
+
     def make_table_id(self, bk_biz_id, bk_data_id, table_name=None):
         if str(bk_biz_id) != "0":
             return f"{bk_biz_id}_bkmonitor_time_series_{bk_data_id}.{self.field_name}"
 
         return f"bkmonitor_time_series_{bk_data_id}.{self.field_name}"
-
-    def set_table_id_from_field_name(self, database_name: str, field_name: str):
-        self.table_id = f"{database_name}.{field_name}"
-        self.field_name = field_name
-
-    def set_tag_list(self, tag_list: list):
-        tag_list = tag_list or []
-        if self.TARGET_DIMENSION_NAME not in tag_list:
-            tag_list = tag_list + [self.TARGET_DIMENSION_NAME]
-        self.tag_list = tag_list
-
-    def set_field_config(self, field_config: dict):
-        self.field_config = field_config or {}
-
-    def set_label(self, label: str):
-        self.label = label or ""
-
-    def set_scope(self, scope: "TimeSeriesScope"):
-        if scope is None:
-            raise ValueError("指标分组不能为空")
-        self.scope_id = scope.id
-
-    def set_scope_by_id(self, scope_id: int, scopes_dict: dict):
-        scope = scopes_dict.get(scope_id)
-        if scope is None:
-            raise ValueError(f"指标分组不存在，请确认后重试。分组ID: {scope_id}")
-        self.scope_id = scope.id
-        return scope
-
-    def set_field_scope(self, field_scope: str = None):
-        self.field_scope = field_scope or self.DEFAULT_DATA_SCOPE_NAME
-
-    def set_group_id(self, group_id: int):
-        self.group_id = group_id
-
-    def update_last_modify_time(self):
-        self.last_modify_time = tz_now()
-
-    def handle_disabled_state(self):
-        field_config = self.field_config or {}
-        if field_config.get("disabled", False):
-            self.scope_id = self.DISABLE_SCOPE_ID
-            return True
-        return False
 
     @classmethod
     def to_rt_field_json(self):
@@ -2400,15 +2414,18 @@ class TimeSeriesMetric(models.Model):
         for metric_data in metrics_to_create:
             scope_obj = scopes_dict.get(metric_data.get("scope_id"))
 
-            metric_obj = cls()
             database_name = table_id.rsplit(".", 1)[0]
-            metric_obj.set_table_id_from_field_name(database_name, metric_data["field_name"])
-            metric_obj.set_tag_list(metric_data.get("tag_list"))
-            metric_obj.set_field_scope(metric_data.get("field_scope"))
-            metric_obj.set_group_id(group_id)
-            metric_obj.set_scope(scope_obj)
-            metric_obj.set_field_config(metric_data.get("field_config"))
-            metric_obj.set_label(metric_data.get("label"))
+            metric_obj = (
+                cls.Builder()
+                .with_table_id_from_field_name(database_name, metric_data["field_name"])
+                .with_tag_list(metric_data.get("tag_list"))
+                .with_field_scope(metric_data.get("field_scope"))
+                .with_group_id(group_id)
+                .with_scope(scope_obj)
+                .with_field_config(metric_data.get("field_config"))
+                .with_label(metric_data.get("label"))
+                .build()
+            )
 
             records_to_create.append(metric_obj)
             scope_moves[(None, scope_obj)].append(metric_obj)
@@ -2436,15 +2453,18 @@ class TimeSeriesMetric(models.Model):
         scope_moves = defaultdict(list)
 
         for metric, validated_request_data in metrics_to_update:
-            metric.set_field_config(validated_request_data.get("field_config"))
-            metric.set_label(validated_request_data.get("label"))
-            metric.set_tag_list(validated_request_data.get("tag_list"))
-            metric.update_last_modify_time()
+            # 使用建造器模式更新 metric
+            cls.Builder(metric).with_field_config(validated_request_data.get("field_config")).with_label(
+                validated_request_data.get("label")
+            ).with_tag_list(
+                validated_request_data.get("tag_list")
+            ).with_updated_modify_time().with_disabled_state_handled().build()
 
             records_to_update.append(metric)
 
-            # 处理禁用状态
-            if metric.handle_disabled_state():
+            # 如果已处理禁用状态，跳过后续处理
+            field_config = metric.field_config or {}
+            if field_config.get("disabled", False):
                 continue
 
             # 保存原始值用于检测变化
