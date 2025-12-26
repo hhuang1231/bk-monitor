@@ -1840,8 +1840,8 @@ class TimeSeriesMetric(models.Model):
             self._metric.scope_id = scope.id
             return self
 
-        def with_scope_by_id(self, scope_id: int, scopes_dict: dict) -> "TimeSeriesMetric.Builder":
-            scope = scopes_dict.get(scope_id)
+        def with_scope_by_id(self, scope_id: int, scope_id_to_obj: dict) -> "TimeSeriesMetric.Builder":
+            scope = scope_id_to_obj.get(scope_id)
             if scope is None:
                 raise ValueError(f"指标分组不存在，请确认后重试。分组ID: {scope_id}")
             self._metric.scope_id = scope.id
@@ -2398,21 +2398,21 @@ class TimeSeriesMetric(models.Model):
     @classmethod
     @atomic
     def batch_create_or_update(
-        cls, metrics_to_create: list, metrics_to_update: list, group_id: int, table_id: str, scopes_dict: dict
+        cls, metrics_to_create: list, metrics_to_update: list, group_id: int, table_id: str, scope_id_to_obj: dict
     ):
         # 批量创建新指标
         return cls._batch_create_metrics(
-            metrics_to_create, group_id, table_id, scopes_dict
-        ) + cls._batch_update_metrics(metrics_to_update, scopes_dict)
+            metrics_to_create, group_id, table_id, scope_id_to_obj
+        ) + cls._batch_update_metrics(metrics_to_update, scope_id_to_obj)
 
     @classmethod
-    def _batch_create_metrics(cls, metrics_to_create, group_id, table_id, scopes_dict):
+    def _batch_create_metrics(cls, metrics_to_create, group_id, table_id, scope_id_to_obj):
         # 准备批量创建的数据
         records_to_create = []
         scope_moves = defaultdict(list)
 
         for metric_data in metrics_to_create:
-            scope_obj = scopes_dict.get(metric_data.get("scope_id"))
+            scope_obj = scope_id_to_obj.get(metric_data.get("scope_id"))
 
             database_name = table_id.rsplit(".", 1)[0]
             metric_obj = (
@@ -2448,7 +2448,7 @@ class TimeSeriesMetric(models.Model):
         return created_metrics_with_id
 
     @classmethod
-    def _batch_update_metrics(cls, metrics_to_update, scopes_dict):
+    def _batch_update_metrics(cls, metrics_to_update, scope_id_to_obj):
         records_to_update = []
         scope_moves = defaultdict(list)
 
@@ -2471,8 +2471,8 @@ class TimeSeriesMetric(models.Model):
             original_tag_list = metric.tag_list or []
             original_scope_id = metric.scope_id
 
-            source_scope = scopes_dict.get(original_scope_id)
-            new_scope = scopes_dict.get(validated_request_data.get("scope_id"))
+            source_scope = scope_id_to_obj.get(original_scope_id)
+            new_scope = scope_id_to_obj.get(validated_request_data.get("scope_id"))
             # 如果 scope 发生变化或者 tag_list 发生变化，记录需要移动的指标
             if new_scope and original_scope_id != new_scope.id or set(original_tag_list) != set(metric.tag_list or []):
                 scope_moves[(source_scope, new_scope)].append(metric)

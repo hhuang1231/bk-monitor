@@ -1458,7 +1458,7 @@ class CreateOrUpdateTimeSeriesMetricResource(Resource):
             time_series_group = self._get_time_series_group(group_id, bk_tenant_id)
 
             # 2. 获取已存在的指标映射
-            existing_metrics_map = self._get_existing_metrics_map(group_id, metrics_data)
+            existing_metrics_map = self._get_metrics_map_by_field_id(group_id, metrics_data)
             existing_disabled_metrics_map = self._get_disabled_metrics_map(group_id)
 
             # 3. 分类处理指标：创建、更新、重启禁用的指标
@@ -1470,10 +1470,10 @@ class CreateOrUpdateTimeSeriesMetricResource(Resource):
             self._validate_field_name_conflicts(metrics_to_create)
 
             # 5. 获取作用域字典
-            scopes_dict = self._get_scopes_dict(group_id)
+            scope_id_to_obj = self._get_scope_id_to_obj(group_id)
 
             # 6. 验证 scope_id 的有效性
-            self._validate_scopes(metrics_to_create, metrics_to_update, scopes_dict)
+            self._validate_scopes(metrics_to_create, metrics_to_update, scope_id_to_obj)
 
             # 7. 组装返回数据
             validated_data.update(
@@ -1481,14 +1481,13 @@ class CreateOrUpdateTimeSeriesMetricResource(Resource):
                     "metrics_to_create": metrics_to_create,
                     "metrics_to_update": metrics_to_update,
                     "table_id": time_series_group.table_id,
-                    "scopes_dict": scopes_dict,
+                    "scope_id_to_obj": scope_id_to_obj,
                 }
             )
 
             return validated_data
 
         def _get_time_series_group(self, group_id, bk_tenant_id):
-            """获取并验证时序分组"""
             time_series_group = models.TimeSeriesGroup.objects.filter(
                 time_series_group_id=group_id,
                 bk_tenant_id=bk_tenant_id,
@@ -1500,8 +1499,7 @@ class CreateOrUpdateTimeSeriesMetricResource(Resource):
 
             return time_series_group
 
-        def _get_existing_metrics_map(self, group_id, metrics_data):
-            """获取已存在的正常指标映射（field_id -> metric）"""
+        def _get_metrics_map_by_field_id(self, group_id, metrics_data):
             field_ids = [m.get("field_id") for m in metrics_data if m.get("field_id")]
             if not field_ids:
                 return {}
@@ -1510,20 +1508,12 @@ class CreateOrUpdateTimeSeriesMetricResource(Resource):
             return {metric.field_id: metric for metric in existing_metrics}
 
         def _get_disabled_metrics_map(self, group_id):
-            """获取已禁用的指标映射（(field_name, field_scope) -> metric）"""
             disabled_metrics = models.TimeSeriesMetric.objects.filter(
                 group_id=group_id, scope_id=models.TimeSeriesMetric.DISABLE_SCOPE_ID
             )
             return {(metric.field_name, metric.field_scope): metric for metric in disabled_metrics}
 
         def _classify_metrics(self, metrics_data, existing_metrics_map, existing_disabled_metrics_map):
-            """
-            分类处理指标数据
-
-            返回:
-                metrics_to_create: 需要创建的新指标列表
-                metrics_to_update: 需要更新的指标列表 [(metric_obj, metric_data), ...]
-            """
             metrics_to_create = []
             metrics_to_update = []
 
@@ -1555,15 +1545,13 @@ class CreateOrUpdateTimeSeriesMetricResource(Resource):
 
             return metrics_to_create, metrics_to_update
 
-        def _get_scopes_dict(self, group_id):
-            """获取作用域字典"""
+        def _get_scope_id_to_obj(self, group_id):
             scopes = models.TimeSeriesScope.objects.filter(group_id=group_id)
-            scopes_dict = {scope.id: scope for scope in scopes}
-            scopes_dict[models.TimeSeriesMetric.DISABLE_SCOPE_ID] = None
-            return scopes_dict
+            scope_id_to_obj = {scope.id: scope for scope in scopes}
+            scope_id_to_obj[models.TimeSeriesMetric.DISABLE_SCOPE_ID] = None
+            return scope_id_to_obj
 
         def _validate_field_name_conflicts(self, metrics_to_create):
-            """检查字段名称冲突"""
             if not metrics_to_create:
                 return
 
@@ -1583,7 +1571,6 @@ class CreateOrUpdateTimeSeriesMetricResource(Resource):
             # TODO: 检查跨批次的字段名冲突，现在直接依赖数据库的唯一索引来保证
 
         def _find_duplicate_names(self, names):
-            """查找列表中的重复名称"""
             seen = set()
             duplicates = []
             for name in names:
@@ -1592,23 +1579,22 @@ class CreateOrUpdateTimeSeriesMetricResource(Resource):
                 seen.add(name)
             return duplicates
 
-        def _validate_scopes(self, metrics_to_create, metrics_to_update, scopes_dict):
-            """验证指标的 scope_id 有效性"""
+        def _validate_scopes(self, metrics_to_create, metrics_to_update, scope_id_to_obj):
             # 验证创建指标的 scope_id
             for metric_data in metrics_to_create:
                 scope_id = metric_data.get("scope_id")
-                if scope_id not in scopes_dict:
+                if scope_id not in scope_id_to_obj:
                     raise ValueError(f"指标分组不存在，请确认后重试。分组ID: {scope_id}")
 
             # 验证更新指标的 scope_id
             for metric, validated_request_data in metrics_to_update:
                 scope_id = validated_request_data.get("scope_id")
-                if scope_id not in scopes_dict:
+                if scope_id not in scope_id_to_obj:
                     raise ValueError(f"指标分组不存在，请确认后重试。分组ID: {scope_id}")
 
                 # 如果 scope 发生变更且原 scope 是 data 类型，不允许修改
                 if metric.scope_id != scope_id:
-                    original_scope = scopes_dict.get(metric.scope_id)
+                    original_scope = scope_id_to_obj.get(metric.scope_id)
                     if original_scope and original_scope.create_from == models.TimeSeriesScope.CREATE_FROM_DATA:
                         raise ValueError(f"数据自动创建的指标分组不允许修改，请确认后重试。分组ID: {metric.scope_id}")
 
@@ -1639,7 +1625,7 @@ class CreateOrUpdateTimeSeriesMetricResource(Resource):
             metrics_to_update=validated_request_data.pop("metrics_to_update"),
             group_id=group_id,
             table_id=validated_request_data.pop("table_id"),
-            scopes_dict=validated_request_data.pop("scopes_dict"),
+            scope_id_to_obj=validated_request_data.pop("scope_id_to_obj"),
         )
 
         if not all_metrics:
