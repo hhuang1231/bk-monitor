@@ -1413,6 +1413,13 @@ class QueryTimeSeriesGroupResource(Resource):
         return list(chain.from_iterable(instance.to_json_v2() for instance in query_set))
 
 
+class ScopeSerializer(serializers.Serializer):
+    """Scope信息序列化器"""
+
+    id = serializers.IntegerField(label="Scope ID")
+    name = serializers.CharField(label="Scope名称")
+
+
 class CreateOrUpdateTimeSeriesMetricResource(Resource):
     """批量创建或更新自定义时序指标"""
 
@@ -1439,6 +1446,24 @@ class CreateOrUpdateTimeSeriesMetricResource(Resource):
             allow_empty=False,
         )
 
+    class ResponseSerializer(serializers.Serializer):
+        """响应序列化器"""
+
+        class MetricResponseSerializer(serializers.Serializer):
+            """单个指标响应序列化器"""
+
+            field_id = serializers.IntegerField(label="字段ID")
+            field_name = serializers.CharField(label="指标字段名称")
+            field_scope = serializers.CharField(label="指标数据分组")
+            scope = ScopeSerializer(required=False, allow_null=True, label="Scope信息")
+            tag_list = serializers.ListField(child=serializers.CharField(), label="Tag列表")
+            field_config = serializers.DictField(label="字段其他配置")
+            label = serializers.CharField(required=False, allow_null=True, label="指标监控对象")
+            create_time = serializers.FloatField(required=False, allow_null=True, label="创建时间戳")
+            update_time = serializers.FloatField(required=False, allow_null=True, label="更新时间戳")
+
+        metrics = serializers.ListField(child=MetricResponseSerializer(), label="指标列表")
+
     def perform_request(self, validated_request_data):
         """执行批量创建或更新时序指标的请求"""
         bk_tenant_id = validated_request_data.pop("bk_tenant_id")
@@ -1454,29 +1479,7 @@ class CreateOrUpdateTimeSeriesMetricResource(Resource):
 
         # 批量获取scope信息
         scope_ids = [m.scope_id for m in all_metrics if m.scope_id]
-        scopes = models.TimeSeriesScope.objects.filter(id__in=scope_ids, group_id=group_id).values("id", "scope_name")
-        scope_map = {scope["id"]: {"id": scope["id"], "name": scope["scope_name"]} for scope in scopes}
-
-        # 构建响应数据
-        results = []
-        for metric in all_metrics:
-            scope_info = None
-            if metric.scope_id:
-                scope_info = scope_map.get(metric.scope_id, {"id": metric.scope_id, "name": ""})
-
-            results.append(
-                {
-                    "field_id": metric.field_id,
-                    "field_name": metric.field_name,
-                    "field_scope": metric.field_scope,
-                    "scope": scope_info,
-                    "tag_list": metric.tag_list or [],
-                    "field_config": metric.field_config or {},
-                    "label": metric.label,
-                    "create_time": metric.create_time.timestamp() if metric.create_time else None,
-                    "update_time": metric.last_modify_time.timestamp() if metric.last_modify_time else None,
-                }
-            )
+        results = models.TimeSeriesMetric.to_metric_info_list(all_metrics, group_id, scope_ids)
 
         return {"metrics": results}
 
@@ -1545,6 +1548,24 @@ class QueryTimeSeriesMetricResource(Resource):
             label="排序字段：name-按名称升序，update_time-按更新时间升序，-name-按名称降序，-update_time-按更新时间降序",
         )
 
+    class ResponseSerializer(serializers.Serializer):
+        """响应序列化器"""
+
+        class MetricSerializer(serializers.Serializer):
+            """单个指标序列化器"""
+
+            field_id = serializers.IntegerField(label="字段ID")
+            scope = ScopeSerializer(required=False, allow_null=True, label="Scope信息")
+            name = serializers.CharField(label="指标名称")
+            tag_list = serializers.ListField(child=serializers.CharField(), label="Tag列表")
+            field_config = serializers.DictField(label="字段配置")
+            field_scope = serializers.CharField(label="指标数据分组")
+            create_time = serializers.FloatField(required=False, allow_null=True, label="创建时间戳")
+            update_time = serializers.FloatField(required=False, allow_null=True, label="更新时间戳")
+
+        metrics = serializers.ListField(child=MetricSerializer(), label="指标列表")
+        total = serializers.IntegerField(label="总数")
+
     def perform_request(self, validated_request_data):
         bk_tenant_id = validated_request_data.pop("bk_tenant_id")
         group_id = validated_request_data["group_id"]
@@ -1577,28 +1598,7 @@ class QueryTimeSeriesMetricResource(Resource):
 
         # 批量获取scope信息
         scope_ids = paginated_query_set.values_list("scope_id", flat=True)
-        scopes = models.TimeSeriesScope.objects.filter(id__in=scope_ids, group_id=group_id).values("id", "scope_name")
-        scope_map = {scope["id"]: {"id": scope["id"], "name": scope["scope_name"]} for scope in scopes}
-
-        # 构建响应数据
-        results = []
-        for metric in paginated_query_set:
-            scope_info = None
-            if metric.scope_id:
-                scope_info = scope_map.get(metric.scope_id, {"id": metric.scope_id, "name": ""})
-
-            results.append(
-                {
-                    "field_id": metric.field_id,
-                    "scope": scope_info,
-                    "name": metric.field_name,
-                    "tag_list": metric.tag_list or [],
-                    "field_config": metric.field_config or {},
-                    "field_scope": metric.field_scope,
-                    "create_time": metric.create_time.timestamp() if metric.create_time else None,
-                    "update_time": metric.last_modify_time.timestamp() if metric.last_modify_time else None,
-                }
-            )
+        results = models.TimeSeriesMetric.to_metric_info_list(paginated_query_set, group_id, scope_ids)
 
         return {"metrics": results, "total": total}
 

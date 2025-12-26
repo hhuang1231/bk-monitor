@@ -2315,6 +2315,27 @@ class TimeSeriesMetric(models.Model):
 
         return result
 
+    @staticmethod
+    def to_metric_info_list(all_metrics, group_id, scope_ids):
+        scopes = TimeSeriesScope.objects.filter(id__in=scope_ids, group_id=group_id).values("id", "scope_name")
+        scope_map = {scope["id"]: {"id": scope["id"], "name": scope["scope_name"]} for scope in scopes}
+        # 准备响应数据，让ResponseSerializer自动序列化
+        results = []
+        for metric in all_metrics:
+            metric_data = {
+                "field_id": metric.field_id,
+                "field_name": metric.field_name,
+                "field_scope": metric.field_scope,
+                "scope": scope_map.get(metric.scope_id) if metric.scope_id else None,
+                "tag_list": metric.tag_list or [],
+                "field_config": metric.field_config or {},
+                "label": metric.label,
+                "create_time": metric.create_time.timestamp() if metric.create_time else None,
+                "update_time": metric.last_modify_time.timestamp() if metric.last_modify_time else None,
+            }
+            results.append(metric_data)
+        return results
+
     @classmethod
     @atomic
     def batch_create_or_update(cls, metrics_data: list, bk_tenant_id: str, group_id: int):
