@@ -1598,24 +1598,6 @@ class CreateOrUpdateTimeSeriesMetricResource(Resource):
                     if original_scope and original_scope.create_from == models.TimeSeriesScope.CREATE_FROM_DATA:
                         raise ValueError(f"数据自动创建的指标分组不允许修改，请确认后重试。分组ID: {metric.scope_id}")
 
-    class ResponseSerializer(serializers.Serializer):
-        """响应序列化器"""
-
-        class MetricResponseSerializer(serializers.Serializer):
-            """单个指标响应序列化器"""
-
-            field_id = serializers.IntegerField(label="字段ID")
-            field_name = serializers.CharField(label="指标字段名称")
-            field_scope = serializers.CharField(label="指标数据分组")
-            scope = ScopeSerializer(required=False, allow_null=True, label="Scope信息")
-            tag_list = serializers.ListField(child=serializers.CharField(), label="Tag列表")
-            field_config = serializers.DictField(label="字段其他配置")
-            label = serializers.CharField(required=False, allow_null=True, label="指标监控对象")
-            create_time = serializers.FloatField(required=False, allow_null=True, label="创建时间戳")
-            update_time = serializers.FloatField(required=False, allow_null=True, label="更新时间戳")
-
-        metrics = serializers.ListField(child=MetricResponseSerializer(), label="指标列表")
-
     def perform_request(self, validated_request_data):
         """执行批量创建或更新时序指标的请求"""
         group_id = validated_request_data.pop("group_id")
@@ -1701,24 +1683,6 @@ class QueryTimeSeriesMetricResource(Resource):
             default="-update_time",
             label="排序字段：name-按名称升序，update_time-按更新时间升序，-name-按名称降序，-update_time-按更新时间降序",
         )
-
-    class ResponseSerializer(serializers.Serializer):
-        """响应序列化器"""
-
-        class MetricSerializer(serializers.Serializer):
-            """单个指标序列化器"""
-
-            field_id = serializers.IntegerField(label="字段ID")
-            scope = ScopeSerializer(required=False, allow_null=True, label="Scope信息")
-            name = serializers.CharField(label="指标名称")
-            tag_list = serializers.ListField(child=serializers.CharField(), label="Tag列表")
-            field_config = serializers.DictField(label="字段配置")
-            field_scope = serializers.CharField(label="指标数据分组")
-            create_time = serializers.FloatField(required=False, allow_null=True, label="创建时间戳")
-            update_time = serializers.FloatField(required=False, allow_null=True, label="更新时间戳")
-
-        metrics = serializers.ListField(child=MetricSerializer(), label="指标列表")
-        total = serializers.IntegerField(label="总数")
 
     def perform_request(self, validated_request_data):
         bk_tenant_id = validated_request_data.pop("bk_tenant_id")
