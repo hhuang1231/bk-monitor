@@ -1446,6 +1446,172 @@ class CreateOrUpdateTimeSeriesMetricResource(Resource):
             allow_empty=False,
         )
 
+        def to_internal_value(self, data):
+            """数据预处理和验证"""
+            validated_data = super().to_internal_value(data)
+
+            bk_tenant_id = validated_data["bk_tenant_id"]
+            group_id = validated_data["group_id"]
+            metrics_data = validated_data["metrics"]
+
+            # 1. 验证时序分组是否存在
+            time_series_group = self._get_time_series_group(group_id, bk_tenant_id)
+
+            # 2. 获取已存在的指标映射
+            existing_metrics_map = self._get_existing_metrics_map(group_id, metrics_data)
+            existing_disabled_metrics_map = self._get_disabled_metrics_map(group_id)
+
+            # 3. 分类处理指标：创建、更新、重启禁用的指标
+            metrics_to_create, metrics_to_update = self._classify_metrics(
+                metrics_data, existing_metrics_map, existing_disabled_metrics_map
+            )
+
+            # 4. 验证字段名称冲突
+            self._validate_field_name_conflicts(metrics_to_create)
+
+            # 5. 获取作用域字典
+            scopes_dict = self._get_scopes_dict(group_id)
+
+            # 6. 验证 scope_id 的有效性
+            self._validate_scopes(metrics_to_create, metrics_to_update, scopes_dict)
+
+            # 7. 组装返回数据
+            validated_data.update(
+                {
+                    "metrics_to_create": metrics_to_create,
+                    "metrics_to_update": metrics_to_update,
+                    "table_id": time_series_group.table_id,
+                    "scopes_dict": scopes_dict,
+                }
+            )
+
+            return validated_data
+
+        def _get_time_series_group(self, group_id, bk_tenant_id):
+            """获取并验证时序分组"""
+            time_series_group = models.TimeSeriesGroup.objects.filter(
+                time_series_group_id=group_id,
+                bk_tenant_id=bk_tenant_id,
+                is_delete=False,
+            ).first()
+
+            if not time_series_group:
+                raise ValueError(f"自定义时序分组不存在，请确认后重试。分组ID: {group_id}")
+
+            return time_series_group
+
+        def _get_existing_metrics_map(self, group_id, metrics_data):
+            """获取已存在的正常指标映射（field_id -> metric）"""
+            field_ids = [m.get("field_id") for m in metrics_data if m.get("field_id")]
+            if not field_ids:
+                return {}
+
+            existing_metrics = models.TimeSeriesMetric.objects.filter(field_id__in=field_ids, group_id=group_id)
+            return {metric.field_id: metric for metric in existing_metrics}
+
+        def _get_disabled_metrics_map(self, group_id):
+            """获取已禁用的指标映射（(field_name, field_scope) -> metric）"""
+            disabled_metrics = models.TimeSeriesMetric.objects.filter(
+                group_id=group_id, scope_id=models.TimeSeriesMetric.DISABLE_SCOPE_ID
+            )
+            return {(metric.field_name, metric.field_scope): metric for metric in disabled_metrics}
+
+        def _classify_metrics(self, metrics_data, existing_metrics_map, existing_disabled_metrics_map):
+            """
+            分类处理指标数据
+
+            返回:
+                metrics_to_create: 需要创建的新指标列表
+                metrics_to_update: 需要更新的指标列表 [(metric_obj, metric_data), ...]
+            """
+            metrics_to_create = []
+            metrics_to_update = []
+
+            for metric_data in metrics_data:
+                metric_data_copy = metric_data.copy()
+                field_id = metric_data_copy.get("field_id")
+
+                # 情况1: 指标已存在，准备更新
+                if field_id and field_id in existing_metrics_map:
+                    existing_metric = existing_metrics_map[field_id]
+                    metrics_to_update.append((existing_metric, metric_data_copy))
+                    continue
+
+                # 情况2: 检查是否有禁用的指标需要重启
+                field_name = metric_data_copy.get("field_name")
+                field_scope = metric_data_copy.get("field_scope", models.TimeSeriesMetric.DEFAULT_DATA_SCOPE_NAME)
+                disabled_metric = existing_disabled_metrics_map.get((field_name, field_scope))
+
+                if disabled_metric:
+                    # 重启禁用的指标：设置 disabled=False
+                    if "field_config" not in metric_data_copy:
+                        metric_data_copy["field_config"] = {}
+                    metric_data_copy["field_config"]["disabled"] = False
+                    metrics_to_update.append((disabled_metric, metric_data_copy))
+                    continue
+
+                # 情况3: 创建新指标
+                metrics_to_create.append(metric_data_copy)
+
+            return metrics_to_create, metrics_to_update
+
+        def _get_scopes_dict(self, group_id):
+            """获取作用域字典"""
+            scopes = models.TimeSeriesScope.objects.filter(group_id=group_id)
+            scopes_dict = {scope.id: scope for scope in scopes}
+            scopes_dict[models.TimeSeriesMetric.DISABLE_SCOPE_ID] = None
+            return scopes_dict
+
+        def _validate_field_name_conflicts(self, metrics_to_create):
+            """检查字段名称冲突"""
+            if not metrics_to_create:
+                return
+
+            # 收集所有字段名并验证必填项
+            field_names = []
+            for metric_data in metrics_to_create:
+                field_name = metric_data.get("field_name")
+                if not field_name:
+                    raise ValueError("创建指标时，field_name为必填项")
+                field_names.append(field_name)
+
+            # 检查同一批次内是否有重复的字段名
+            duplicate_names = self._find_duplicate_names(field_names)
+            if duplicate_names:
+                raise ValueError(f"同一批次内指标字段名称[{', '.join(duplicate_names)}]重复，请使用其他名称")
+
+            # TODO: 检查跨批次的字段名冲突，现在直接依赖数据库的唯一索引来保证
+
+        def _find_duplicate_names(self, names):
+            """查找列表中的重复名称"""
+            seen = set()
+            duplicates = []
+            for name in names:
+                if name in seen and name not in duplicates:
+                    duplicates.append(name)
+                seen.add(name)
+            return duplicates
+
+        def _validate_scopes(self, metrics_to_create, metrics_to_update, scopes_dict):
+            """验证指标的 scope_id 有效性"""
+            # 验证创建指标的 scope_id
+            for metric_data in metrics_to_create:
+                scope_id = metric_data.get("scope_id")
+                if scope_id not in scopes_dict:
+                    raise ValueError(f"指标分组不存在，请确认后重试。分组ID: {scope_id}")
+
+            # 验证更新指标的 scope_id
+            for metric, validated_request_data in metrics_to_update:
+                scope_id = validated_request_data.get("scope_id")
+                if scope_id not in scopes_dict:
+                    raise ValueError(f"指标分组不存在，请确认后重试。分组ID: {scope_id}")
+
+                # 如果 scope 发生变更且原 scope 是 data 类型，不允许修改
+                if metric.scope_id != scope_id:
+                    original_scope = scopes_dict.get(metric.scope_id)
+                    if original_scope and original_scope.create_from == models.TimeSeriesScope.CREATE_FROM_DATA:
+                        raise ValueError(f"数据自动创建的指标分组不允许修改，请确认后重试。分组ID: {metric.scope_id}")
+
     class ResponseSerializer(serializers.Serializer):
         """响应序列化器"""
 
@@ -1466,13 +1632,15 @@ class CreateOrUpdateTimeSeriesMetricResource(Resource):
 
     def perform_request(self, validated_request_data):
         """执行批量创建或更新时序指标的请求"""
-        bk_tenant_id = validated_request_data.pop("bk_tenant_id")
         group_id = validated_request_data.pop("group_id")
-        metrics = validated_request_data.pop("metrics")
 
-        result = models.TimeSeriesMetric.batch_create_or_update(metrics, bk_tenant_id, group_id)
-
-        all_metrics = result["created_metrics"] + result["updated_metrics"]
+        all_metrics = models.TimeSeriesMetric.batch_create_or_update(
+            metrics_to_create=validated_request_data.pop("metrics_to_create"),
+            metrics_to_update=validated_request_data.pop("metrics_to_update"),
+            group_id=group_id,
+            table_id=validated_request_data.pop("table_id"),
+            scopes_dict=validated_request_data.pop("scopes_dict"),
+        )
 
         if not all_metrics:
             return {"metrics": []}
