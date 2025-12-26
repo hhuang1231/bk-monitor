@@ -1874,7 +1874,6 @@ class TimeSeriesMetric(models.Model):
 
         return f"bkmonitor_time_series_{bk_data_id}.{self.field_name}"
 
-    @classmethod
     def to_rt_field_json(self):
         """
         仅返回自身相关的信息json格式，其他的内容需要调用方自行追加，目前已知需要用户自定义添加的内容
