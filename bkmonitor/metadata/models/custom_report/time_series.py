@@ -1651,13 +1651,13 @@ class TimeSeriesMetric(models.Model):
     def to_dict(self):
         """将 TimeSeriesMetric 对象转换为字典格式"""
         return {
-            "metric_name": self.field_name,
+            "name": self.field_name,
             "field_id": self.field_id,
             "field_scope": self.field_scope,
             "tag_list": self.tag_list,
             "field_config": self.field_config or {},
             "create_time": self.create_time.timestamp() if self.create_time else None,
-            "last_modify_time": self.last_modify_time.timestamp() if self.last_modify_time else None,
+            "update_time": self.last_modify_time.timestamp() if self.last_modify_time else None,
         }
 
     @classmethod

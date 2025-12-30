@@ -427,3 +427,144 @@ class CreateOrUpdateTimeSeriesMetricRequestSerializer(BaseTimeSeriesScopeRequest
                     raise ValueError(
                         _(f"数据自动创建的指标分组不允许修改，请确认后重试。分组ID: {metric_obj.scope_id}")
                     )
+
+
+class QueryTimeSeriesMetricRequestSerializer(BaseTimeSeriesScopeRequestSerializer):
+    # 排序字段映射
+    ORDER_FIELD_MAPPING = {
+        "name": "field_name",
+        "update_time": "last_modify_time",
+        "-name": "-field_name",
+        "-update_time": "-last_modify_time",
+    }
+
+    class QueryTimeSeriesMetricConditionSerializer(serializers.Serializer):
+        key = serializers.ChoiceField(
+            choices=[
+                "name",
+                "field_config_alias",
+                "field_config_unit",
+                "field_config_aggregate_method",
+                "field_config_hidden",
+                "field_config_disabled",
+                "scope_id",
+                "field_id",
+            ],
+            required=True,
+            label="搜索字段",
+        )
+        values = serializers.ListField(
+            child=serializers.CharField(),
+            required=True,
+            label="搜索值列表（多个值用OR连接）",
+            min_length=1,
+        )
+        search_type = serializers.ChoiceField(
+            choices=["regex", "fuzzy", "exact"],
+            required=False,
+            default="fuzzy",
+            label="搜索类型：regex-正则表达式，fuzzy-模糊搜索，exact-精确匹配（仅对name字段有效，其他字段默认为exact）",
+        )
+
+    page = serializers.IntegerField(default=1, required=False, label="页数", min_value=1)
+    page_size = serializers.IntegerField(default=10, required=False, label="页长", min_value=1, max_value=1000)
+    conditions = serializers.ListField(
+        child=QueryTimeSeriesMetricConditionSerializer(),
+        required=False,
+        label="搜索条件列表，同一字段的多个值用OR，不同字段之间用AND",
+        allow_empty=True,
+    )
+    order_by = serializers.ChoiceField(
+        choices=["name", "update_time", "-name", "-update_time"],
+        required=False,
+        default="-update_time",
+        label="排序字段：name-按名称升序，update_time-按更新时间升序，-name-按名称降序，-update_time-按更新时间降序",
+    )
+
+    def _query_and_cache_related_objects(self, validated_data: dict) -> None:
+        """查询并缓存相关对象：根据查询条件构建 metric 查询集"""
+        page = validated_data["page"]
+        page_size = validated_data["page_size"]
+        conditions = validated_data.get("conditions", [])
+
+        # 构建查询集
+        query_set = models.TimeSeriesMetric.objects.filter(group_id=validated_data["group_id"])
+
+        # 应用搜索条件
+        if conditions:
+            final_query = None
+            for condition in conditions:
+                condition_query = self._build_condition_query(condition)
+                if condition_query:
+                    final_query = condition_query if final_query is None else final_query & condition_query
+            if final_query:
+                query_set = query_set.filter(final_query)
+
+        # 应用排序
+        query_set = query_set.order_by(self.ORDER_FIELD_MAPPING.get(validated_data["order_by"]))
+
+        # 缓存查询集和分页信息到 validated_data 中
+        validated_data["metric_query_set"] = query_set
+        validated_data["total"] = query_set.count()
+
+        # 分页处理
+        if page_size > 0:
+            offset = (page - 1) * page_size
+            validated_data["paginated_metric_query_set"] = query_set[offset : offset + page_size]
+        else:
+            validated_data["paginated_metric_query_set"] = query_set
+
+    @staticmethod
+    def _build_condition_query(condition):
+        """构建单个字段的查询条件（多个值用OR连接）"""
+        from django.db.models import Q
+
+        key = condition["key"]
+        values = condition["values"]
+        search_type = condition.get("search_type", "fuzzy" if key == "name" else "exact")
+
+        if not values:
+            return None
+
+        # 为每个值构建Q对象，然后用OR连接
+        condition_query = None
+        for value in values:
+            q_obj = None
+
+            # name字段特殊处理（支持多种搜索类型）
+            if key == "name":
+                if search_type == "regex":
+                    q_obj = Q(field_name__regex=value)
+                elif search_type == "fuzzy":
+                    q_obj = Q(field_name__icontains=value)
+                else:  # exact
+                    q_obj = Q(field_name=value)
+
+            # field_config相关字段
+            elif key == "field_config_alias":
+                q_obj = Q(field_config__alias__icontains=value)
+            elif key == "field_config_unit":
+                q_obj = Q(field_config__unit__iexact=value)
+            elif key == "field_config_aggregate_method":
+                q_obj = Q(field_config__aggregate_method__iexact=value)
+            elif key in ("field_config_hidden", "field_config_disabled"):
+                # 查询 True 时只匹配明确为 True 的记录，查询 False 时匹配所有不为 True 的记录（包括空值、不存在或为 False）
+                field_key = key.replace("field_config_", "")
+                if value.lower() in ("true", "1"):
+                    q_obj = Q(**{f"field_config__{field_key}": True})
+                else:
+                    # 匹配 field_config 为空字典、键不存在、或值不为 True 的情况
+                    q_obj = Q(**{f"field_config__{field_key}__isnull": True}) | Q(
+                        **{f"field_config__{field_key}": False}
+                    )
+
+            # 整数字段
+            elif key == "scope_id":
+                q_obj = Q(scope_id=int(value))
+            elif key == "field_id":
+                q_obj = Q(field_id=int(value))
+
+            if q_obj:
+                condition_query = q_obj if condition_query is None else condition_query | q_obj
+
+        return condition_query
