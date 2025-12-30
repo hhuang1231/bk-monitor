@@ -1513,7 +1513,9 @@ class QueryTimeSeriesScopeResource(Resource):
 
             for metric in all_metrics:
                 key = (metric.group_id, metric.scope_id)
-                metrics_by_scope[key].append(metric.to_dict())
+                metric_dict = metric.to_dict()
+                metric_dict["metric_name"] = metric_dict.pop("name")
+                metrics_by_scope[key].append(metric_dict)
 
         # 使用 to_dict 方法构造 scope 响应数据
         results = []
