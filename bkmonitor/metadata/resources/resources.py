@@ -69,6 +69,7 @@ from metadata.models.space.space_table_id_redis import SpaceTableIDRedis
 from metadata.resources.time_series import (
     CreateOrUpdateTimeSeriesScopeRequestSerializer,
     DeleteTimeSeriesScopeRequestSerializer,
+    QueryTimeSeriesScopeRequestSerializer,
 )
 from metadata.service.data_source import (
     modify_data_id_source,
@@ -1678,104 +1679,36 @@ class DeleteTimeSeriesScopeResource(Resource):
 
 
 class QueryTimeSeriesScopeResource(Resource):
-    """
-    查询自定义时序指标分组列表
-
-    支持通过 group_id 和 scope_ids 进行查询，返回列表结果
-    """
-
-    class RequestSerializer(serializers.Serializer):
-        bk_tenant_id = TenantIdField(label="租户ID")
-        group_id = serializers.IntegerField(required=True, label="自定义时序数据源ID")
-        scope_ids = serializers.ListField(
-            child=serializers.IntegerField(), required=False, label="指标分组ID列表", allow_empty=True
-        )
-        scope_name = serializers.CharField(required=False, label="指标分组名称")
-        include_metrics = serializers.BooleanField(required=False, default=False, label="是否返回指标数据")
+    RequestSerializer = QueryTimeSeriesScopeRequestSerializer
 
     def perform_request(self, validated_request_data):
-        bk_tenant_id = validated_request_data.pop("bk_tenant_id")
-        group_id = validated_request_data.get("group_id")
-        scope_ids = validated_request_data.get("scope_ids")
-        scope_name = validated_request_data.get("scope_name")
-        include_metrics = validated_request_data.get("include_metrics")
-
-        if not models.TimeSeriesGroup.objects.filter(
-            time_series_group_id=group_id, bk_tenant_id=bk_tenant_id, is_delete=False
-        ).exists():
-            raise ValueError(_("自定义时序分组不存在，请确认后重试"))
-
-        query_set = models.TimeSeriesScope.objects.all()
-        if group_id is not None:
-            query_set = query_set.filter(group_id=group_id)
-        if scope_ids:
-            query_set = query_set.filter(id__in=scope_ids)
-        if scope_name:
-            query_set = query_set.filter(scope_name__icontains=scope_name)
-        results = self._build_grouped_results(query_set, group_id, include_metrics)
-
-        return results
-
-    @staticmethod
-    def _build_grouped_results(query_set, group_id, include_metrics):
-        # 使用 values() 直接获取字典数据，避免 ORM 对象创建开销
-        scopes = list(query_set.values("id", "group_id", "scope_name", "dimension_config", "auto_rules", "create_from"))
+        scopes = list(validated_request_data.get("scope_query_set"))
         if not scopes:
             return []
 
-        scope_ids = [scope["id"] for scope in scopes]
-
         metrics_by_scope = defaultdict(list)
 
-        if include_metrics:
-            # 使用 values() 批量查询 metrics，避免 ORM 对象转换
-            all_metrics = (
-                models.TimeSeriesMetric.objects.filter(group_id=group_id, scope_id__in=scope_ids)
-                .values(
-                    "field_name",
-                    "field_id",
-                    "field_scope",
-                    "tag_list",
-                    "field_config",
-                    "create_time",
-                    "last_modify_time",
-                    "group_id",
-                    "scope_id",
-                )
-                .iterator(chunk_size=500)
-            )
+        if validated_request_data.get("include_metrics"):
+            # 批量查询 metrics 对象
+            all_metrics = models.TimeSeriesMetric.objects.filter(
+                group_id=validated_request_data.get("group_id"), scope_id__in=[scope.id for scope in scopes]
+            ).iterator(chunk_size=500)
 
             for metric in all_metrics:
-                key = (metric["group_id"], metric["scope_id"])
-                metrics_by_scope[key].append(
-                    {
-                        "metric_name": metric["field_name"],
-                        "field_id": metric["field_id"],
-                        "field_scope": metric["field_scope"],
-                        "tag_list": metric["tag_list"],
-                        "field_config": metric["field_config"] or {},
-                        "create_time": metric["create_time"].timestamp() if metric["create_time"] else None,
-                        "last_modify_time": metric["last_modify_time"].timestamp()
-                        if metric["last_modify_time"]
-                        else None,
-                    }
-                )
+                key = (metric.group_id, metric.scope_id)
+                metrics_by_scope[key].append(metric.to_dict())
 
-        return [
-            {
-                "scope_id": scope["id"],
-                "group_id": scope["group_id"],
-                "scope_name": scope["scope_name"],
-                "dimension_config": scope["dimension_config"] or {},
-                "auto_rules": scope["auto_rules"],
-                "metric_list": metrics_by_scope.get((scope["group_id"], scope["id"]), []),
-                "create_from": scope["create_from"],
-                "metric_count": models.TimeSeriesMetric.objects.filter(
-                    group_id=scope["group_id"], scope_id=scope["id"]
-                ).count(),
-            }
-            for scope in scopes
-        ]
+        # 使用 to_dict 方法构造 scope 响应数据
+        results = []
+        for scope in scopes:
+            scope_dict = scope.to_dict()
+            scope_dict["metric_list"] = metrics_by_scope.get((scope.group_id, scope.id), [])
+            scope_dict["metric_count"] = models.TimeSeriesMetric.objects.filter(
+                group_id=scope.group_id, scope_id=scope.id
+            ).count()
+            results.append(scope_dict)
+
+        return results
 
 
 class QueryBCSMetricsResource(Resource):

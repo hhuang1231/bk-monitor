@@ -1162,7 +1162,7 @@ class TimeSeriesScope(models.Model):
             "scope_id": self.id,
             "group_id": self.group_id,
             "scope_name": self.scope_name,
-            "dimension_config": self.dimension_config,
+            "dimension_config": self.dimension_config or {},
             "auto_rules": self.auto_rules,
             "create_from": self.create_from,
         }
@@ -1647,6 +1647,18 @@ class TimeSeriesMetric(models.Model):
             result.append(dimension)
 
         return result
+
+    def to_dict(self):
+        """将 TimeSeriesMetric 对象转换为字典格式"""
+        return {
+            "metric_name": self.field_name,
+            "field_id": self.field_id,
+            "field_scope": self.field_scope,
+            "tag_list": self.tag_list,
+            "field_config": self.field_config or {},
+            "create_time": self.create_time.timestamp() if self.create_time else None,
+            "last_modify_time": self.last_modify_time.timestamp() if self.last_modify_time else None,
+        }
 
     @classmethod
     def get_metric_tag_from_metric_info(cls, metric_info: dict) -> list:

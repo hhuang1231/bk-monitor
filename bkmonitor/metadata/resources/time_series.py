@@ -246,4 +246,31 @@ class DeleteTimeSeriesScopeRequestSerializer(BaseTimeSeriesScopeRequestSerialize
         # 检查是否有数据自动创建的分组，不允许删除
         auto_created_scope_names = [s.scope_name for s in old_scopes_to_delete if s.is_create_from_data_or_default()]
         if auto_created_scope_names:
-            raise ValueError(_("不允许删除数据自动创建的分组: {}").format(", ".join(auto_created_scope_names)))
+            raise ValueError(_(f"不允许删除数据自动创建的分组: {', '.join(auto_created_scope_names)}"))
+
+
+class QueryTimeSeriesScopeRequestSerializer(BaseTimeSeriesScopeRequestSerializer):
+    """查询自定义时序指标分组列表的请求序列化器"""
+
+    scope_ids = serializers.ListField(
+        child=serializers.IntegerField(), required=False, label="指标分组ID列表", allow_empty=True
+    )
+    scope_name = serializers.CharField(required=False, label="指标分组名称")
+    include_metrics = serializers.BooleanField(required=False, default=False, label="是否返回指标数据")
+
+    def _query_and_cache_related_objects(self, validated_data: dict) -> None:
+        """查询并缓存相关对象：根据查询条件构建 scope 查询集"""
+        scope_ids = validated_data.get("scope_ids")
+        scope_name = validated_data.get("scope_name")
+
+        # 构建查询集
+        query_set = models.TimeSeriesScope.objects.filter(group_id=validated_data["group_id"])
+
+        if scope_ids:
+            query_set = query_set.filter(id__in=scope_ids)
+
+        if scope_name:
+            query_set = query_set.filter(scope_name__icontains=scope_name)
+
+        # 缓存查询集到 validated_data 中
+        validated_data["scope_query_set"] = query_set
