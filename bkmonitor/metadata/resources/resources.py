@@ -66,6 +66,10 @@ from metadata.models.data_link.utils import (
 )
 from metadata.models.space.constants import SPACE_UID_HYPHEN, EtlConfigs, SpaceTypes
 from metadata.models.space.space_table_id_redis import SpaceTableIDRedis
+from metadata.resources.time_series import (
+    CreateOrUpdateTimeSeriesScopeRequestSerializer,
+    DeleteTimeSeriesScopeRequestSerializer,
+)
 from metadata.service.data_source import (
     modify_data_id_source,
     stop_or_enable_datasource,
@@ -1646,33 +1650,17 @@ class CreateOrUpdateTimeSeriesScopeResource(Resource):
     如果指标分组已存在则更新，不存在则创建
     """
 
-    class RequestSerializer(serializers.Serializer):
-        bk_tenant_id = TenantIdField(label="租户ID")
-        group_id = serializers.IntegerField(required=True, label="自定义时序数据源ID")
-
-        class ScopeSerializer(serializers.Serializer):
-            scope_id = serializers.IntegerField(required=False, label="指标分组ID")
-            scope_name = serializers.CharField(required=False, label="指标分组名", max_length=255)
-            dimension_config = serializers.DictField(required=False, allow_null=True, label="分组下的维度配置")
-            auto_rules = serializers.ListField(required=False, label="自动分组的匹配规则列表")
-
-        scopes = serializers.ListField(
-            required=True, child=ScopeSerializer(), label="批量创建或更新的分组列表", min_length=1
-        )
+    RequestSerializer = CreateOrUpdateTimeSeriesScopeRequestSerializer
 
     def perform_request(self, validated_request_data):
-        bk_tenant_id = validated_request_data.pop("bk_tenant_id")
-        group_id = validated_request_data.pop("group_id")
-        scopes = validated_request_data["scopes"]
-
-        # 使用统一的事务方法批量创建或更新
         results = models.TimeSeriesScope.bulk_create_or_update_scopes(
-            bk_tenant_id=bk_tenant_id,
-            group_id=group_id,
-            scopes=scopes,
+            group_id=validated_request_data["group_id"],
+            new_scopes_to_create=validated_request_data["new_scopes_to_create"],
+            new_scopes_to_update=validated_request_data["new_scopes_to_update"],
+            old_scopes_to_update=validated_request_data.pop("old_scopes_to_update"),
         )
 
-        return results
+        return [scope.to_dict() for scope in results]
 
 
 class DeleteTimeSeriesScopeResource(Resource):
@@ -1680,24 +1668,12 @@ class DeleteTimeSeriesScopeResource(Resource):
     批量删除自定义时序指标分组
     """
 
-    class RequestSerializer(serializers.Serializer):
-        bk_tenant_id = TenantIdField(label="租户ID")
-        group_id = serializers.IntegerField(required=True, label="自定义时序数据源ID")
-
-        class ScopeSerializer(serializers.Serializer):
-            scope_name = serializers.CharField(required=True, label="指标分组名", max_length=255)
-
-        scopes = serializers.ListField(required=True, child=ScopeSerializer(), label="批量删除的分组列表", min_length=1)
+    RequestSerializer = DeleteTimeSeriesScopeRequestSerializer
 
     def perform_request(self, validated_request_data):
-        bk_tenant_id = validated_request_data.pop("bk_tenant_id")
-        group_id = validated_request_data.pop("group_id")
-        scopes = validated_request_data["scopes"]
-
         models.TimeSeriesScope.bulk_delete_scopes(
-            bk_tenant_id=bk_tenant_id,
-            group_id=group_id,
-            scopes=scopes,
+            time_series_group=validated_request_data.pop("validated_time_series_group"),
+            old_scopes_to_delete=validated_request_data.pop("old_scopes_to_delete"),
         )
 
 
