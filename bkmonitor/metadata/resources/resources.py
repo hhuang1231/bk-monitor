@@ -67,6 +67,7 @@ from metadata.models.data_link.utils import (
 from metadata.models.space.constants import SPACE_UID_HYPHEN, EtlConfigs, SpaceTypes
 from metadata.models.space.space_table_id_redis import SpaceTableIDRedis
 from metadata.resources.time_series import (
+    CreateOrUpdateTimeSeriesMetricRequestSerializer,
     CreateOrUpdateTimeSeriesScopeRequestSerializer,
     DeleteTimeSeriesScopeRequestSerializer,
     QueryTimeSeriesScopeRequestSerializer,
@@ -1421,36 +1422,19 @@ class QueryTimeSeriesGroupResource(Resource):
 class CreateOrUpdateTimeSeriesMetricResource(Resource):
     """批量创建或更新自定义时序指标"""
 
-    class RequestSerializer(serializers.Serializer):
-        class MetricSerializer(serializers.Serializer):
-            """单个指标的序列化器"""
-
-            field_id = serializers.IntegerField(required=False, label="字段ID")
-            field_name = serializers.CharField(required=False, label="指标字段名称", max_length=255)
-            field_scope = serializers.CharField(required=False, label="指标数据分组", max_length=255)
-            tag_list = serializers.ListField(
-                required=False, label="Tag列表", child=serializers.CharField(), allow_null=True
-            )
-            field_config = serializers.DictField(required=False, label="字段其他配置", allow_null=True)
-            label = serializers.CharField(required=False, label="指标监控对象", max_length=255, allow_null=True)
-            scope_id = serializers.IntegerField(required=True, label="指标分组ID")
-
-        bk_tenant_id = TenantIdField(label="租户ID")
-        group_id = serializers.IntegerField(required=True, label="自定义时序数据源ID")
-        metrics = serializers.ListField(
-            required=True,
-            label="批量指标列表",
-            child=MetricSerializer(),
-            allow_empty=False,
-        )
+    RequestSerializer = CreateOrUpdateTimeSeriesMetricRequestSerializer
 
     def perform_request(self, validated_request_data):
         """执行批量创建或更新时序指标的请求"""
-        bk_tenant_id = validated_request_data.pop("bk_tenant_id")
-        group_id = validated_request_data.pop("group_id")
-        metrics = validated_request_data.pop("metrics")
+        results = models.TimeSeriesMetric.batch_create_or_update(
+            group=validated_request_data["validated_time_series_group"],
+            new_metrics_to_create=validated_request_data["new_metrics_to_create"],
+            new_metrics_to_update=validated_request_data["new_metrics_to_update"],
+            old_metrics_to_update=validated_request_data["old_metrics_to_update"],
+            scopes_dict=validated_request_data["scopes_dict"],
+        )
 
-        models.TimeSeriesMetric.batch_create_or_update(metrics, bk_tenant_id, group_id)
+        return [metric.to_dict() for metric in results]
 
 
 class QueryTimeSeriesMetricResource(Resource):

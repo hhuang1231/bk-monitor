@@ -274,3 +274,156 @@ class QueryTimeSeriesScopeRequestSerializer(BaseTimeSeriesScopeRequestSerializer
 
         # 缓存查询集到 validated_data 中
         validated_data["scope_query_set"] = query_set
+
+
+class CreateOrUpdateTimeSeriesMetricRequestSerializer(BaseTimeSeriesScopeRequestSerializer):
+    """批量创建或更新自定义时序指标的请求序列化器"""
+
+    class MetricSerializer(serializers.Serializer):
+        """单个指标的序列化器"""
+
+        field_id = serializers.IntegerField(required=False, label="字段ID")
+        field_name = serializers.CharField(required=False, label="指标字段名称", max_length=255)
+        field_scope = serializers.CharField(required=False, label="指标数据分组", max_length=255)
+        tag_list = serializers.ListField(
+            required=False, label="Tag列表", child=serializers.CharField(), allow_null=True
+        )
+        field_config = serializers.DictField(required=False, label="字段其他配置", allow_null=True)
+        label = serializers.CharField(required=False, label="指标监控对象", max_length=255, allow_null=True)
+        scope_id = serializers.IntegerField(required=True, label="指标分组ID")
+
+    metrics = serializers.ListField(
+        required=True,
+        label="批量指标列表",
+        child=MetricSerializer(),
+        allow_empty=False,
+    )
+
+    def _extract_and_preprocess_data(self, validated_data: dict) -> None:
+        """提取和预处理业务数据：分离创建和更新的指标"""
+        metrics_data = validated_data["metrics"]
+
+        # 分离创建和更新的指标
+        new_metrics_to_create = [m for m in metrics_data if not m.get("field_id")]
+        new_metrics_to_update = [m for m in metrics_data if m.get("field_id")]
+
+        validated_data["new_metrics_to_create"] = new_metrics_to_create
+        validated_data["new_metrics_to_update"] = new_metrics_to_update
+
+    def _query_and_cache_related_objects(self, validated_data: dict) -> None:
+        """查询并缓存相关对象：获取要更新的指标对象、已存在的禁用指标、scope对象，并处理禁用指标重启"""
+        group_id = validated_data["group_id"]
+        new_metrics_to_create = validated_data["new_metrics_to_create"]
+        new_metrics_to_update = validated_data["new_metrics_to_update"]
+
+        # 批量获取要更新的指标对象
+        old_metrics_to_update = list(
+            models.TimeSeriesMetric.objects.filter(
+                field_id__in=[m["field_id"] for m in new_metrics_to_update], group_id=group_id
+            )
+        )
+
+        # 批量获取已存在的禁用指标并构建映射
+        existing_disabled_metrics_map = {
+            (m.field_name, m.field_scope): m
+            for m in models.TimeSeriesMetric.objects.filter(
+                group_id=group_id, scope_id=models.TimeSeriesMetric.DISABLE_SCOPE_ID
+            )
+        }
+
+        # 处理禁用指标重启：将需要重启的禁用指标从创建列表移到更新列表
+        final_metrics_to_create = []
+        for metric_data in new_metrics_to_create:
+            field_name = metric_data.get("field_name")
+            field_scope = metric_data.get("field_scope", models.TimeSeriesMetric.DEFAULT_DATA_SCOPE_NAME)
+            disabled_metric = existing_disabled_metrics_map.get((field_name, field_scope))
+
+            if disabled_metric:
+                # 将禁用指标转换为更新操作
+                metric_data_copy = {**metric_data, "field_id": disabled_metric.field_id}
+                field_config = metric_data_copy.get("field_config") or {}
+                metric_data_copy["field_config"] = {**field_config, "disabled": False}
+                new_metrics_to_update.append(metric_data_copy)
+                old_metrics_to_update.append(disabled_metric)
+            else:
+                final_metrics_to_create.append(metric_data)
+
+        # 更新 validated_data 中的数据
+        validated_data.update(
+            {
+                "new_metrics_to_create": final_metrics_to_create,
+                "new_metrics_to_update": new_metrics_to_update,
+                "old_metrics_to_update": old_metrics_to_update,
+            }
+        )
+
+        # 批量获取所有 scope 对象并构建映射
+        scopes_dict = {scope.id: scope for scope in models.TimeSeriesScope.objects.filter(group_id=group_id)}
+        scopes_dict[models.TimeSeriesMetric.DISABLE_SCOPE_ID] = None
+        validated_data["scopes_dict"] = scopes_dict
+
+    def _perform_business_validation(self, validated_data: dict) -> None:
+        """执行业务验证：验证创建和更新场景"""
+        new_metrics_to_create = validated_data["new_metrics_to_create"]
+        new_metrics_to_update = validated_data["new_metrics_to_update"]
+        old_metrics_to_update = validated_data["old_metrics_to_update"]
+        scopes_dict = validated_data["scopes_dict"]
+
+        # 验证创建场景
+        if new_metrics_to_create:
+            self._validate_metrics_for_create(new_metrics_to_create, scopes_dict)
+
+        # 验证更新场景
+        if new_metrics_to_update:
+            self._validate_metrics_for_update(new_metrics_to_update, old_metrics_to_update, scopes_dict)
+
+    @staticmethod
+    def _validate_metrics_for_create(new_metrics_to_create: list[dict], scopes_dict: dict) -> None:
+        """验证批量创建的指标数据"""
+        field_names = []
+        for metric_data in new_metrics_to_create:
+            # 验证必填项
+            field_name = metric_data.get("field_name")
+            if not field_name:
+                raise ValueError(_("创建指标时，field_name为必填项"))
+            field_names.append(field_name)
+
+            # 验证 scope_id 是否存在
+            scope_id = metric_data.get("scope_id")
+            if scope_id not in scopes_dict:
+                raise ValueError(_(f"指标分组不存在，请确认后重试。分组ID: {scope_id}"))
+
+        # 检查批次内部是否有重复的 field_name
+        seen = set()
+        duplicates = [name for name in field_names if name in seen or seen.add(name)]
+        if duplicates:
+            raise ValueError(_(f"同一批次内指标字段名称[{', '.join(set(duplicates))}]重复，请使用其他名称"))
+
+    @staticmethod
+    def _validate_metrics_for_update(
+        new_metrics_to_update: list[dict], old_metrics_to_update: list, scopes_dict: dict
+    ) -> None:
+        """验证批量更新的指标数据"""
+        # 检查指标是否存在
+        field_ids_requested = {m["field_id"] for m in new_metrics_to_update}
+        field_ids_found = {metric.field_id for metric in old_metrics_to_update}
+        if missing_ids := field_ids_requested - field_ids_found:
+            raise ValueError(_("指标不存在，请确认后重试: field_id={}").format(", ".join(map(str, missing_ids))))
+
+        # 构建 field_id 到对象的映射
+        validated_metrics_map = {metric.field_id: metric for metric in old_metrics_to_update}
+
+        # 验证 scope_id 和修改权限
+        for metric_data in new_metrics_to_update:
+            scope_id = metric_data.get("scope_id")
+            if scope_id and scope_id not in scopes_dict:
+                raise ValueError(_(f"指标分组不存在，请确认后重试。分组ID: {scope_id}"))
+
+            # 验证是否允许修改 scope_id（数据自动创建的分组不允许修改）
+            metric_obj = validated_metrics_map[metric_data["field_id"]]
+            if scope_id and scope_id != metric_obj.scope_id:
+                source_scope = scopes_dict.get(metric_obj.scope_id)
+                if source_scope and source_scope.create_from == models.TimeSeriesScope.CREATE_FROM_DATA:
+                    raise ValueError(
+                        _(f"数据自动创建的指标分组不允许修改，请确认后重试。分组ID: {metric_obj.scope_id}")
+                    )

@@ -2113,80 +2113,30 @@ class TimeSeriesMetric(models.Model):
 
     @classmethod
     @atomic
-    def batch_create_or_update(cls, metrics_data: list, bk_tenant_id: str, group_id: int):
-        """批量创建或更新时序指标
-
-        :param metrics_data: 指标数据列表，每个元素包含字段信息
-        :param bk_tenant_id: 租户ID
-        :param group_id: 自定义时序数据源ID
-        """
-        # 验证group_id是否存在
-        time_series_group = TimeSeriesGroup.objects.filter(
-            time_series_group_id=group_id,
-            bk_tenant_id=bk_tenant_id,
-            is_delete=False,
-        ).first()
-
-        if not time_series_group:
-            raise ValueError(f"自定义时序分组不存在，请确认后重试。分组ID: {group_id}")
-
-        table_id = time_series_group.table_id
-
-        # 批量查找已存在的指标
-        field_ids = [m.get("field_id") for m in metrics_data if m.get("field_id")]
-        existing_metrics_map = {
-            metric.field_id: metric for metric in cls.objects.filter(field_id__in=field_ids, group_id=group_id)
-        }
-
-        existing_disabled_metrics_map = {
-            (metric.field_name, metric.field_scope): metric
-            for metric in cls.objects.filter(group_id=group_id, scope_id=cls.DISABLE_SCOPE_ID)
-        }
-
-        # 分离需要创建和更新的指标
-        metrics_to_create = []
-        metrics_to_update = []
-
-        for metric_data in metrics_data:
-            metric_data_copy = metric_data.copy()
-            field_id = metric_data_copy.get("field_id")
-            metric = existing_metrics_map.get(field_id) if field_id else None
-
-            # 如果指标存在，准备更新
-            if metric is not None:
-                metrics_to_update.append((metric, metric_data_copy))
-                continue
-
-            # 检查是否有禁用的指标需要重启
-            field_name = metric_data_copy.get("field_name")
-            field_scope = metric_data_copy.get("field_scope", cls.DEFAULT_DATA_SCOPE_NAME)
-            disabled_metric = existing_disabled_metrics_map.get((field_name, field_scope))
-
-            # 如果有禁用的指标
-            if disabled_metric:
-                metric_data_copy["field_config"].update({"disabled": False})
-                metrics_to_update.append((disabled_metric, metric_data_copy))
-                continue
-
-            # 准备创建新指标
-            metrics_to_create.append(metric_data_copy)
-
-        scopes_dict = {scope.id: scope for scope in TimeSeriesScope.objects.filter(group_id=group_id)}
-        scopes_dict[TimeSeriesMetric.DISABLE_SCOPE_ID] = None
-
+    def batch_create_or_update(
+        cls,
+        group: "TimeSeriesGroup",
+        new_metrics_to_create: list[dict],
+        new_metrics_to_update: list[dict],
+        old_metrics_to_update: list,
+        scopes_dict: dict,
+    ):
         # 批量创建新指标
-        if metrics_to_create:
-            cls._batch_create_metrics(metrics_to_create, group_id, table_id, scopes_dict)
+        created_metrics = []
+        if new_metrics_to_create:
+            created_metrics = cls._batch_create_metrics(
+                new_metrics_to_create, group.time_series_group_id, group.table_id, scopes_dict
+            )
 
         # 批量更新现有指标
-        if metrics_to_update:
-            cls._batch_update_metrics(metrics_to_update, scopes_dict)
+        updated_metrics = []
+        if new_metrics_to_update:
+            updated_metrics = cls._batch_update_metrics(new_metrics_to_update, old_metrics_to_update, scopes_dict)
+
+        return created_metrics + updated_metrics
 
     @classmethod
     def _batch_create_metrics(cls, metrics_to_create, group_id, table_id, scopes_dict):
-        # 检查字段名称冲突
-        cls._validate_field_name_conflicts(metrics_to_create)
-
         # 准备批量创建的数据
         records_to_create = []
         scope_moves = defaultdict(list)
@@ -2203,8 +2153,6 @@ class TimeSeriesMetric(models.Model):
 
             scope_id = metric_data.get("scope_id")
             scope = scopes_dict.get(scope_id)
-            if scope is None:
-                raise ValueError(f"指标分组不存在，请确认后重试。分组ID: {scope_id}")
 
             metric_obj = cls(
                 table_id=metric_data["table_id"],
@@ -2224,26 +2172,43 @@ class TimeSeriesMetric(models.Model):
 
         TimeSeriesScope.update_dimension_config_and_metrics_scope_id(scope_moves=scope_moves, need_update_metrics=False)
 
+        from django.db.models import Q
+
+        query = Q()
+        for metric_obj in records_to_create:
+            query |= Q(field_name=metric_obj.field_name, field_scope=metric_obj.field_scope)
+
+        return list(cls.objects.filter(query, group_id=group_id))
+
     @classmethod
-    def _batch_update_metrics(cls, metrics_to_update, scopes_dict):
+    def _batch_update_metrics(cls, new_metrics_to_update, old_metrics_to_update, scopes_dict):
         updatable_fields = ["field_config", "label", "tag_list", "scope_id", "last_modify_time"]
         records_to_update = []
         scope_moves = defaultdict(list)
 
-        for metric, validated_request_data in metrics_to_update:
+        # 构建 field_id 到对象的映射
+        metrics_map = {metric.field_id: metric for metric in old_metrics_to_update}
+
+        for metric_data in new_metrics_to_update:
+            field_id = metric_data.get("field_id")
+            metric = metrics_map.get(field_id)
+            if not metric:
+                continue
+
             # 保存原始的 tag_list 和 scope_id，用于检测变化
             original_tag_list = metric.tag_list or []
             original_scope_id = metric.scope_id
 
             # 统一更新字段值 updatable_fields
             for field in updatable_fields:
-                setattr(metric, field, validated_request_data.get(field, getattr(metric, field)))
+                if field in metric_data:
+                    setattr(metric, field, metric_data[field])
 
             # 更新最后修改时间
             metric.last_modify_time = tz_now()
 
             # 如果 field_config 中 disabled 为 true，将 scope_id 置为 DISABLE_SCOPE_ID, 并跳过维度配置更新
-            field_config = validated_request_data.get("field_config") or metric.field_config or {}
+            field_config = metric_data.get("field_config") or metric.field_config or {}
             if field_config.get("disabled", False):
                 metric.scope_id = cls.DISABLE_SCOPE_ID
                 records_to_update.append(metric)
@@ -2251,18 +2216,12 @@ class TimeSeriesMetric(models.Model):
 
             records_to_update.append(metric)
 
-            scope_id = validated_request_data.get("scope_id")
-            new_scope = scopes_dict.get(scope_id)
-            if new_scope is None:
-                raise ValueError(f"指标分组不存在，请确认后重试。分组ID: {scope_id}")
+            scope_id = metric_data.get("scope_id")
+            new_scope = scopes_dict.get(scope_id) if scope_id else None
 
             # 检测是否需要记录移动的指标
             scope_changed = new_scope and original_scope_id != new_scope.id
             source_scope = scopes_dict.get(original_scope_id)
-
-            # 如果 scope 是 data 类型，不允许修改 scope_id
-            if scope_changed and source_scope.create_from == TimeSeriesScope.CREATE_FROM_DATA:
-                raise ValueError(f"数据自动创建的指标分组不允许修改，请确认后重试。分组ID: {original_scope_id}")
 
             tag_list_changed = set(original_tag_list) != set(metric.tag_list or [])
 
@@ -2276,30 +2235,7 @@ class TimeSeriesMetric(models.Model):
 
         TimeSeriesScope.update_dimension_config_and_metrics_scope_id(scope_moves=scope_moves)
 
-    @classmethod
-    def _validate_field_name_conflicts(cls, metrics_to_create):
-        """检查字段名称冲突"""
-        # 收集所有字段名
-        field_names = []
-        for metric_data in metrics_to_create:
-            field_name = metric_data.get("field_name")
-            if not field_name:
-                raise ValueError("创建指标时，field_name为必填项")
-            field_names.append(field_name)
-
-        # 检查同一批次内是否有重复的字段名
-        unique_field_names = set(field_names)
-        if len(field_names) != len(unique_field_names):
-            # 找出重复的字段名
-            seen = set()
-            batch_conflicting_names = []
-            for name in field_names:
-                if name in seen and name not in batch_conflicting_names:
-                    batch_conflicting_names.append(name)
-                seen.add(name)
-            raise ValueError(f"同一批次内指标字段名称[{', '.join(batch_conflicting_names)}]重复，请使用其他名称")
-
-        # todo 检查跨批次的字段名冲突, 现在直接依赖数据库的唯一索引来保证
+        return records_to_update
 
 
 class TimeSeriesTagManager(models.Manager):
