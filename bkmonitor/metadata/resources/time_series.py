@@ -13,6 +13,7 @@ from rest_framework import serializers
 
 from bkmonitor.utils.serializers import TenantIdField
 from metadata import models
+from django.db.models import Q
 
 
 class BaseTimeSeriesScopeRequestSerializer(serializers.Serializer):
@@ -381,6 +382,7 @@ class CreateOrUpdateTimeSeriesMetricRequestSerializer(BaseTimeSeriesScopeRequest
     def _validate_metrics_for_create(new_metrics_to_create: list[dict], scopes_dict: dict) -> None:
         """验证批量创建的指标数据"""
         field_names = []
+        query = Q()
         for metric_data in new_metrics_to_create:
             # 验证必填项
             field_name = metric_data.get("field_name")
@@ -392,6 +394,14 @@ class CreateOrUpdateTimeSeriesMetricRequestSerializer(BaseTimeSeriesScopeRequest
             scope_id = metric_data.get("scope_id")
             if scope_id not in scopes_dict:
                 raise ValueError(_(f"指标分组不存在，请确认后重试。分组ID: {scope_id}"))
+
+            query |= Q(
+                field_name=metric_data.get("field_name"),
+                field_scope=metric_data.get("field_scope", models.TimeSeriesMetric.DEFAULT_DATA_SCOPE_NAME),
+            )
+
+        if models.TimeSeriesMetric.objects.filter(query).exists():
+            raise ValueError(_("指标字段名称已存在，请使用其他名称"))
 
         # 检查批次内部是否有重复的 field_name
         seen = set()
@@ -517,8 +527,6 @@ class QueryTimeSeriesMetricRequestSerializer(BaseTimeSeriesScopeRequestSerialize
     @staticmethod
     def _build_condition_query(condition):
         """构建单个字段的查询条件（多个值用OR连接）"""
-        from django.db.models import Q
-
         key = condition["key"]
         values = condition["values"]
         search_type = condition.get("search_type", "fuzzy" if key == "name" else "exact")
