@@ -1510,10 +1510,10 @@ class QueryTimeSeriesMetricResource(Resource):
                 min_length=1,
             )
             search_type = serializers.ChoiceField(
-                choices=["regex", "fuzzy", "exact"],
+                choices=["regex", "fuzzy", "exact", "case_sensitive"],
                 required=False,
                 default="fuzzy",
-                label="搜索类型：regex-正则表达式，fuzzy-模糊搜索，exact-精确匹配（仅对name字段有效，其他字段默认为exact）",
+                label="搜索类型：regex-正则表达式，fuzzy-模糊搜索，exact-精确匹配，case_sensitive-区分大小写精确匹配（仅对name字段有效，其他字段默认为exact）",
             )
 
         bk_tenant_id = TenantIdField(label="租户ID")
@@ -1629,6 +1629,8 @@ class QueryTimeSeriesMetricResource(Resource):
                     q_obj = Q(field_name__regex=value)
                 elif search_type == "fuzzy":
                     q_obj = Q(field_name__icontains=value)
+                elif search_type == "case_sensitive":
+                    q_obj = Q(field_name__contains=value)
                 else:  # exact
                     q_obj = Q(field_name=value)
 
@@ -2453,9 +2455,7 @@ class ListResultTableSnapshotResource(Resource):
             query &= Q(target_snapshot_repository_name__in=repository_names)
 
         result_queryset = models.EsSnapshot.objects.filter(query)
-        snapshot_pairs = list(
-            result_queryset.values_list("table_id", "target_snapshot_repository_name").distinct()
-        )
+        snapshot_pairs = list(result_queryset.values_list("table_id", "target_snapshot_repository_name").distinct())
         table_ids = list({table_id for table_id, _ in snapshot_pairs})
         repository_names = list({repository_name for _, repository_name in snapshot_pairs})
 
@@ -2466,8 +2466,7 @@ class ListResultTableSnapshotResource(Resource):
         for snapshot in result_queryset:
             snapshot_json = snapshot.to_self_json()
             table_id_doc_count_and_store_size = all_doc_count_and_store_size.get(
-                (snapshot.table_id, snapshot.target_snapshot_repository_name),
-                {}
+                (snapshot.table_id, snapshot.target_snapshot_repository_name), {}
             )
             snapshot_json["doc_count"] = table_id_doc_count_and_store_size.get("doc_count", 0)
             snapshot_json["store_size"] = table_id_doc_count_and_store_size.get("store_size", 0)

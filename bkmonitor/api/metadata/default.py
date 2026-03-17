@@ -623,10 +623,10 @@ class QueryTimeSeriesMetricResource(MetaDataAPIGWResource):
                 min_length=1,
             )
             search_type = serializers.ChoiceField(
-                choices=["regex", "fuzzy", "exact"],
+                choices=["regex", "fuzzy", "exact", "case_sensitive"],
                 required=False,
                 default="fuzzy",
-                label="搜索类型：regex-正则表达式，fuzzy-模糊搜索，exact-精确匹配（仅对name字段有效，其他字段默认为exact）",
+                label="搜索类型：regex-正则表达式，fuzzy-模糊搜索，exact-精确匹配，case_sensitive-区分大小写精确匹配（仅对name字段有效，其他字段默认为exact）",
             )
 
         bk_tenant_id = TenantIdField(label="租户ID")

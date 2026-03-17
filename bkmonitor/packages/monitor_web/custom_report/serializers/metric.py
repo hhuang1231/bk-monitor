@@ -94,6 +94,17 @@ class CustomTSScopeResponseSerializer(serializers.Serializer):
         return validated_data
 
 
+class CustomTSGroupingRuleResponseSerializer(serializers.Serializer):
+    """分组规则列表响应序列化器 — 仅返回分组+维度+指标数量"""
+
+    id = serializers.IntegerField(label=_("分组 ID"))
+    name = serializers.CharField(label=_("分组名称"))
+    dimension_config = serializers.ListField(label=_("维度配置"), default=list)
+    metric_count = serializers.IntegerField(label=_("指标数量"))
+    auto_rules = serializers.ListField(label=_("自动规则"))
+    create_from = serializers.CharField(label=_("创建来源"))
+
+
 class DimensionConfigRequestSerializer(serializers.Serializer):
     alias = serializers.CharField(label=_("字段别名"), allow_blank=True, required=False)
     common = serializers.BooleanField(label=_("是否常用字段"), required=False)
