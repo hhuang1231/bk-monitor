@@ -269,7 +269,7 @@ class GetCustomTsGraphConfig(Resource):
             field_scope = serializers.CharField(label=_("数据分组名称"), allow_blank=True, default="")
             name = serializers.CharField(label=_("指标名称"))
 
-        metrics = MetricSerializer(label=_("查询的指标"), many=True, default=list)
+        metrics = MetricSerializer(label=_("查询的指标"), many=True, default=list, max_length=50)
         where = ConditionSerializer(label=_("过滤条件"), many=True, allow_empty=True, default=list)
         group_by = GroupBySerializer(label=_("聚合维度"), many=True, allow_empty=True, default=list)
         common_conditions = serializers.ListField(label=_("常用维度过滤"), default=list)
@@ -277,7 +277,6 @@ class GetCustomTsGraphConfig(Resource):
         compare = CompareSerializer(label=_("对比配置"), default={})
         start_time = serializers.IntegerField(label=_("开始时间"))
         end_time = serializers.IntegerField(label=_("结束时间"))
-        max_panels = serializers.IntegerField(label=_("最大返回 panels 数量"), default=50, required=False)
 
     class ResponseSerializer(serializers.Serializer):
         class GroupSerializer(serializers.Serializer):
@@ -647,7 +646,7 @@ class GetCustomTsGraphConfig(Resource):
         metric_result = api.metadata.query_time_series_metric(
             group_id=params["time_series_group_id"],
             page=1,
-            page_size=len(metric_names),
+            page_size=min(len(metric_names) * 5, 1000),
             conditions=conditions,
         )
 
@@ -696,21 +695,6 @@ class GetCustomTsGraphConfig(Resource):
             groups = self.metric_compare(result_table_id, data_label, metrics_list, params, dimension_names)
         else:
             raise ValueError(f"Invalid compare config type: {compare_config.get('type')}")
-
-        # 限制返回 panels 数量
-        max_panels = params.get("max_panels", 50)
-        total_panels = 0
-        truncated_groups = []
-        for group in groups:
-            panels = group.get("panels", [])
-            remaining = max_panels - total_panels
-            if remaining <= 0:
-                break
-            if len(panels) > remaining:
-                group["panels"] = panels[:remaining]
-            truncated_groups.append(group)
-            total_panels += len(group["panels"])
-        groups = truncated_groups
 
         from constants.apm import ApmMetricProcessor
 
