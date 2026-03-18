@@ -138,7 +138,7 @@ class GetCustomTsMetricAggInfo(Resource):
         request_params = {
             "group_id": params["time_series_group_id"],
             "page": 1,
-            "page_size": min(len(metric_ids), 1000),
+            "page_size": min(len(metric_ids), 100000),
             "conditions": conditions,
         }
         result = api.metadata.query_time_series_metric(**request_params)
@@ -646,7 +646,7 @@ class GetCustomTsGraphConfig(Resource):
         metric_result = api.metadata.query_time_series_metric(
             group_id=params["time_series_group_id"],
             page=1,
-            page_size=min(len(metric_names), 1000),
+            page_size=min(len(metric_names), 100000),
             conditions=conditions,
         )
 

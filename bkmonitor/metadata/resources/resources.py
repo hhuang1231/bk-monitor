@@ -1519,7 +1519,7 @@ class QueryTimeSeriesMetricResource(Resource):
         bk_tenant_id = TenantIdField(label="租户ID")
         group_id = serializers.IntegerField(required=True, label="自定义时序数据源ID")
         page = serializers.IntegerField(default=1, required=False, label="页数", min_value=1)
-        page_size = serializers.IntegerField(default=10, required=False, label="页长", min_value=1, max_value=1000)
+        page_size = serializers.IntegerField(default=10, required=False, label="页长", min_value=1, max_value=100000)
         conditions = serializers.ListField(
             child=QueryTimeSeriesMetricConditionSerializer(),
             required=False,
