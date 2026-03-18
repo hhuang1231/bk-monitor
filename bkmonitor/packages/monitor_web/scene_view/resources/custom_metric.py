@@ -138,7 +138,7 @@ class GetCustomTsMetricAggInfo(Resource):
         request_params = {
             "group_id": params["time_series_group_id"],
             "page": 1,
-            "page_size": len(metric_ids),
+            "page_size": min(len(metric_ids), 1000),
             "conditions": conditions,
         }
         result = api.metadata.query_time_series_metric(**request_params)
@@ -269,7 +269,7 @@ class GetCustomTsGraphConfig(Resource):
             field_scope = serializers.CharField(label=_("数据分组名称"), allow_blank=True, default="")
             name = serializers.CharField(label=_("指标名称"))
 
-        metrics = MetricSerializer(label=_("查询的指标"), many=True, default=list, max_length=50)
+        metrics = MetricSerializer(label=_("查询的指标"), many=True, default=list)
         where = ConditionSerializer(label=_("过滤条件"), many=True, allow_empty=True, default=list)
         group_by = GroupBySerializer(label=_("聚合维度"), many=True, allow_empty=True, default=list)
         common_conditions = serializers.ListField(label=_("常用维度过滤"), default=list)
@@ -646,7 +646,7 @@ class GetCustomTsGraphConfig(Resource):
         metric_result = api.metadata.query_time_series_metric(
             group_id=params["time_series_group_id"],
             page=1,
-            page_size=min(len(metric_names) * 5, 1000),
+            page_size=min(len(metric_names), 1000),
             conditions=conditions,
         )
 
