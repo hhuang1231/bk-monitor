@@ -18,6 +18,7 @@ from apm_web.custom_metric.utils import (
     DefaultScopeNameMixin,
     DefaultFieldScopeMixin,
 )
+from monitor_web.custom_report.constants import DEFAULT_FIELD_SCOPE
 from monitor_web.custom_report.handlers.metric.query import (
     ScopeQueryConverter,
 )
@@ -36,6 +37,9 @@ from monitor_web.custom_report.resources.metric import (
 class ApmGetCustomTsFields(ScopeQueryFilterMixin, GetCustomTsFields):
     class RequestSerializer(BaseRequestSerializer, GetCustomTsFields.RequestSerializer):
         pass
+
+    def get_movable(self, metric_obj, params: dict) -> bool:
+        return metric_obj.field_scope == params.get("scope_prefix", "") + DEFAULT_FIELD_SCOPE
 
     def get_extra_conditions(self, params: dict) -> list[dict]:
         """APM 场景：通过 scope_prefix 查找对应的 scope_ids，注入到查询条件中"""

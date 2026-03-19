@@ -704,7 +704,13 @@ class GetCustomTsFields(CustomTSScopeMixin, Resource):
         """子类可覆盖此方法注入额外的查询条件"""
         return []
 
+    def get_movable(self, metric_obj: "MetricQueryResponseDTO", params: dict) -> bool:
+        """判断指标是否可移动（即是否属于默认分组）"""
+        return metric_obj.field_scope == DEFAULT_FIELD_SCOPE
+
     def perform_request(self, params: dict):
+        from dataclasses import asdict
+
         from monitor_web.custom_report.handlers.metric.query import MetricQueryConverter
 
         time_series_group_id: int = params["time_series_group_id"]
@@ -736,9 +742,11 @@ class GetCustomTsFields(CustomTSScopeMixin, Resource):
             order_by=params.get("order_by", "-update_time"),
         )
 
-        from dataclasses import asdict
-
-        metrics_list = [asdict(m) for m in paginated_result.metrics]
+        metrics_list = []
+        for m in paginated_result.metrics:
+            metric_dict = asdict(m)
+            metric_dict["movable"] = self.get_movable(m, params)
+            metrics_list.append(metric_dict)
         return {"total": paginated_result.total, "list": metrics_list}
 
 
