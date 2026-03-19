@@ -636,8 +636,14 @@ class QueryTimeSeriesMetricResource(MetaDataAPIGWResource):
         conditions = serializers.ListField(
             child=QueryTimeSeriesMetricConditionSerializer(),
             required=False,
-            label="搜索条件列表，同一字段的多个值用OR，不同字段之间用AND",
+            label="搜索条件列表，同一字段的多个值用OR，不同字段之间的连接方式由condition_connector决定",
             allow_empty=True,
+        )
+        condition_connector = serializers.ChoiceField(
+            choices=["and", "or"],
+            required=False,
+            default="and",
+            label="不同字段之间的连接方式：and-且（交集），or-或（并集）",
         )
         order_by = serializers.ChoiceField(
             choices=["name", "update_time", "-name", "-update_time"],

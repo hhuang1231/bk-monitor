@@ -339,6 +339,7 @@ class MetricQueryConverter(BaseQueryConverter):
     def query_time_series_metric(
         self,
         conditions: list[dict[str, Any]] | None = None,
+        condition_connector: str = "and",
         page: int = 1,
         page_size: int = 20,
         order_by: str = "-update_time",
@@ -349,6 +350,7 @@ class MetricQueryConverter(BaseQueryConverter):
             "page": page,
             "page_size": page_size,
             "order_by": order_by,
+            "condition_connector": condition_connector,
         }
         if conditions:
             request_params["conditions"] = conditions

@@ -667,6 +667,12 @@ class GetCustomTsFields(CustomTSScopeMixin, Resource):
             label=_("每页数量"), default=20, min_value=1, max_value=1000, required=False
         )
         conditions = serializers.DictField(label=_("搜索条件"), required=False, default=dict)
+        condition_connector = serializers.ChoiceField(
+            label=_("不同字段之间的连接方式"),
+            choices=["and", "or"],
+            default="and",
+            required=False,
+        )
         order_by = serializers.ChoiceField(
             label=_("排序字段"),
             choices=["name", "-name", "update_time", "-update_time"],
@@ -724,6 +730,7 @@ class GetCustomTsFields(CustomTSScopeMixin, Resource):
 
         paginated_result = converter.query_time_series_metric(
             conditions=conditions if conditions else None,
+            condition_connector=params.get("condition_connector", "and"),
             page=params.get("page", 1),
             page_size=params.get("page_size", 20),
             order_by=params.get("order_by", "-update_time"),
