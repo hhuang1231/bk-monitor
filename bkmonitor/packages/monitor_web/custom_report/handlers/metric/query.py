@@ -357,24 +357,3 @@ class MetricQueryConverter(BaseQueryConverter):
         result = api.metadata.query_time_series_metric(**request_params)
         metrics = [MetricQueryResponseDTO.from_response_dict(m) for m in result.get("metrics", [])]
         return MetricQueryPaginatedResponseDTO(total=result.get("total", 0), metrics=metrics)
-
-    def query_all_metrics_by_conditions(
-        self,
-        conditions: list[dict[str, Any]] | None = None,
-        page_size: int = 500,
-    ) -> list[MetricQueryResponseDTO]:
-        """自动分页获取所有匹配指标"""
-        all_metrics: list[MetricQueryResponseDTO] = []
-        page = 1
-        while True:
-            paginated_result = self.query_time_series_metric(conditions=conditions, page=page, page_size=page_size)
-            all_metrics.extend(paginated_result.metrics)
-            if len(all_metrics) >= paginated_result.total:
-                break
-            page += 1
-        return all_metrics
-
-    @staticmethod
-    def filter_disabled_metrics(metrics: list[MetricQueryResponseDTO]) -> list[MetricQueryResponseDTO]:
-        """过滤掉 disabled 为 True 的指标"""
-        return [m for m in metrics if not m.config.disabled]

@@ -1015,37 +1015,31 @@ class PreviewGroupingRule(CustomTSScopeMixin, Resource):
     def perform_request(self, params: dict):
         from monitor_web.custom_report.handlers.metric.query import MetricQueryConverter
 
-        # 预编译正则表达式
-        rule_compile_map: dict[str, re.Pattern] = {rule: re.compile(rule) for rule in params["auto_rules"]}
-        scope_converter = ScopeQueryConverter(params["time_series_group_id"])
+        auto_rules = params["auto_rules"]
+        if not auto_rules:
+            return {"auto_metrics": []}
 
-        # 获取默认分组（不含指标，仅获取 scope_id）
+        scope_converter = ScopeQueryConverter(params["time_series_group_id"])
         default_scope_obj = scope_converter.get_default_scope_obj(
             default_scope_name=self.get_default_scope_name(params), include_metrics=False
         )
 
-        # 通过 query_time_series_metric 获取默认分组的所有非禁用指标
-        metric_converter = MetricQueryConverter(params["time_series_group_id"])
-        conditions = [
-            {"key": "scope_id", "values": [str(default_scope_obj.id)], "search_type": "exact"},
-            {"key": "field_config_disabled", "values": ["false"], "search_type": "exact"},
-        ]
-        all_metrics = metric_converter.query_all_metrics_by_conditions(conditions=conditions)
+        # API 层面直接正则匹配，只返回命中的指标
+        matched_metrics = MetricQueryConverter(params["time_series_group_id"]).query_time_series_metric(
+            conditions=[
+                {"key": "scope_id", "values": [str(default_scope_obj.id)], "search_type": "exact"},
+                {"key": "field_config_disabled", "values": ["false"], "search_type": "exact"},
+                {"key": "name", "values": auto_rules, "search_type": "regex"},
+            ],
+            page_size=100000,
+        ).metrics
+        metric_names = [m.name for m in matched_metrics]
 
-        auto_metrics: dict[str, list[str]] = defaultdict(list)
-        for metric_obj in all_metrics:
-            metric_name: str = metric_obj.name
-            for rule, pattern in rule_compile_map.items():
-                if pattern.match(metric_name):
-                    auto_metrics[rule].append(metric_name)
-
+        # 按规则分组
         return {
             "auto_metrics": [
-                {
-                    "auto_rule": auto_rule,
-                    "metrics": metrics,
-                }
-                for auto_rule, metrics in auto_metrics.items()
+                {"auto_rule": rule, "metrics": [name for name in metric_names if re.match(rule, name)]}
+                for rule in auto_rules
             ],
         }
 
