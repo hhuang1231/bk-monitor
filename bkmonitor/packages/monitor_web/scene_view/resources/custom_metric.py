@@ -643,10 +643,11 @@ class GetCustomTsGraphConfig(Resource):
         conditions = [
             {"key": "name", "values": metric_names, "search_type": "exact"},
         ]
+        # 如果是 apm 场景，可能存在同名指标，需要乘以分组数量。后续可以考虑使用指标 id 过滤优化
         metric_result = api.metadata.query_time_series_metric(
             group_id=params["time_series_group_id"],
             page=1,
-            page_size=min(len(metric_names), 100000),
+            page_size=min(len(metric_names) * len(metadata_result), 100000),
             conditions=conditions,
         )
 
