@@ -339,6 +339,7 @@ class MetricQueryConverter(BaseQueryConverter):
     def query_time_series_metric(
         self,
         conditions: list[dict[str, Any]] | None = None,
+        mandatory_conditions: list[dict[str, Any]] | None = None,
         condition_connector: str = "and",
         page: int = 1,
         page_size: int = 20,
@@ -354,6 +355,8 @@ class MetricQueryConverter(BaseQueryConverter):
         }
         if conditions:
             request_params["conditions"] = conditions
+        if mandatory_conditions:
+            request_params["mandatory_conditions"] = mandatory_conditions
         result = api.metadata.query_time_series_metric(**request_params)
         metrics = [MetricQueryResponseDTO.from_response_dict(m) for m in result.get("metrics", [])]
         return MetricQueryPaginatedResponseDTO(total=result.get("total", 0), metrics=metrics)

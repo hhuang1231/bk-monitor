@@ -716,17 +716,18 @@ class GetCustomTsFields(CustomTSScopeMixin, Resource):
         time_series_group_id: int = params["time_series_group_id"]
         converter = MetricQueryConverter(time_series_group_id)
 
-        # 转换 conditions 字典为列表格式
+        # 转换 conditions 字典为列表格式（用户条件，受 condition_connector 控制）
         conditions_dict = params.get("conditions", {})
         conditions = self._convert_conditions_dict_to_list(conditions_dict)
 
-        # 注入子类的额外条件
-        conditions.extend(self.get_extra_conditions(params))
+        # 强制条件（不受 condition_connector 影响，始终以 AND 方式生效）
+        mandatory_conditions = []
+        mandatory_conditions.extend(self.get_extra_conditions(params))
 
-        # 默认排除 disabled 指标
+        # 默认排除 disabled 指标（放入强制条件）
         has_disabled_condition = any(c["key"] == "field_config_disabled" for c in conditions)
         if not has_disabled_condition:
-            conditions.append(
+            mandatory_conditions.append(
                 {
                     "key": "field_config_disabled",
                     "values": ["false"],
@@ -736,6 +737,7 @@ class GetCustomTsFields(CustomTSScopeMixin, Resource):
 
         paginated_result = converter.query_time_series_metric(
             conditions=conditions if conditions else None,
+            mandatory_conditions=mandatory_conditions if mandatory_conditions else None,
             condition_connector=params.get("condition_connector", "and"),
             page=params.get("page", 1),
             page_size=params.get("page_size", 20),

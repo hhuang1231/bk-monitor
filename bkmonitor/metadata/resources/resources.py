@@ -1526,6 +1526,12 @@ class QueryTimeSeriesMetricResource(Resource):
             label="搜索条件列表，同一字段的多个值用OR，不同字段之间的连接方式由condition_connector决定",
             allow_empty=True,
         )
+        mandatory_conditions = serializers.ListField(
+            child=QueryTimeSeriesMetricConditionSerializer(),
+            required=False,
+            label="强制过滤条件列表，始终以 AND 方式与其他条件组合，不受 condition_connector 影响",
+            allow_empty=True,
+        )
         condition_connector = serializers.ChoiceField(
             choices=["and", "or"],
             required=False,
@@ -1599,25 +1605,44 @@ class QueryTimeSeriesMetricResource(Resource):
 
     def _apply_search_filters(self, query_set, validated_request_data):
         """应用搜索过滤条件
-        同一字段的多个值用OR，不同字段之间的连接方式由condition_connector决定（默认AND）
+        mandatory_conditions 始终以 AND 方式与其他条件组合，不受 condition_connector 影响。
+        conditions 中同一字段的多个值用OR，不同字段之间的连接方式由condition_connector决定（默认AND）。
+        最终查询逻辑：mandatory_conditions AND (user_conditions)
         """
         conditions = validated_request_data.get("conditions", [])
-        if not conditions:
-            return query_set
-
+        mandatory_conditions = validated_request_data.get("mandatory_conditions", [])
         connector = validated_request_data.get("condition_connector", "and")
 
-        # 构建查询：同一字段的多个值用OR，不同字段之间根据connector决定用AND或OR
-        final_query = None
+        # 1. 构建用户条件查询（受 condition_connector 控制）
+        user_query = None
         for condition in conditions:
             condition_query = self._build_condition_query(condition)
             if condition_query:
-                if final_query is None:
-                    final_query = condition_query
+                if user_query is None:
+                    user_query = condition_query
                 elif connector == "or":
-                    final_query = final_query | condition_query
+                    user_query = user_query | condition_query
                 else:
-                    final_query = final_query & condition_query
+                    user_query = user_query & condition_query
+
+        # 2. 构建强制条件查询（始终 AND）
+        mandatory_query = None
+        for condition in mandatory_conditions:
+            condition_query = self._build_condition_query(condition)
+            if condition_query:
+                if mandatory_query is None:
+                    mandatory_query = condition_query
+                else:
+                    mandatory_query = mandatory_query & condition_query
+
+        # 3. 组合：mandatory AND user_conditions
+        final_query = None
+        if mandatory_query and user_query:
+            final_query = mandatory_query & user_query
+        elif mandatory_query:
+            final_query = mandatory_query
+        elif user_query:
+            final_query = user_query
 
         return query_set.filter(final_query) if final_query else query_set
 
