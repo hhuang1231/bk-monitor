@@ -1013,6 +1013,8 @@ class CreateOrUpdateGroupingRule(CustomTSScopeMixin, Resource):
             field_modify_service.add_metric(ModifyMetric(id=metric_id, scope_id=scope_obj.id))
         field_modify_service.apply_change()
 
+        return {"scope_id": scope_obj.id}
+
 
 class PreviewGroupingRule(CustomTSScopeMixin, Resource):
     """
