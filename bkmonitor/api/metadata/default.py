@@ -639,6 +639,12 @@ class QueryTimeSeriesMetricResource(MetaDataAPIGWResource):
             label="搜索条件列表，同一字段的多个值用OR，不同字段之间的连接方式由condition_connector决定",
             allow_empty=True,
         )
+        mandatory_conditions = serializers.ListField(
+            child=QueryTimeSeriesMetricConditionSerializer(),
+            required=False,
+            label="强制过滤条件列表，始终以 AND 方式与其他条件组合，不受 condition_connector 影响",
+            allow_empty=True,
+        )
         condition_connector = serializers.ChoiceField(
             choices=["and", "or"],
             required=False,
