@@ -1507,7 +1507,7 @@ class QueryTimeSeriesMetricResource(Resource):
                 child=serializers.CharField(),
                 required=True,
                 label="搜索值列表（多个值用OR连接）",
-                min_length=1,
+                min_length=0,
             )
             search_type = serializers.ChoiceField(
                 choices=["regex", "fuzzy", "exact", "case_sensitive"],
