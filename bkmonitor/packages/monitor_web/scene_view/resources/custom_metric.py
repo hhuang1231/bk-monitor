@@ -91,7 +91,6 @@ class GetCustomTsMetricGroups(Resource):
                 metrics.append(
                     {
                         "field_id": metric_data.get("field_id"),
-                        "field_scope": metric_data.get("field_scope"),
                         "metric_name": metric_name,
                         "alias": field_config.get("alias", ""),
                     }
@@ -138,7 +137,7 @@ class GetCustomTsMetricAggInfo(Resource):
         request_params = {
             "group_id": params["time_series_group_id"],
             "page": 1,
-            "page_size": min(len(metric_ids), 100000),
+            "page_size": -1,  # 获取所有数据
             "conditions": conditions,
         }
         result = api.metadata.query_time_series_metric(**request_params)
@@ -265,11 +264,7 @@ class GetCustomTsGraphConfig(Resource):
             value = serializers.ListField(label=_("值"))
             condition = serializers.ChoiceField(choices=["and", "or"], label=_("条件"), default="and")
 
-        class MetricSerializer(serializers.Serializer):
-            field_scope = serializers.CharField(label=_("数据分组名称"), allow_blank=True, default="")
-            name = serializers.CharField(label=_("指标名称"))
-
-        metrics = MetricSerializer(label=_("查询的指标"), many=True, default=list)
+        metric_ids = serializers.ListField(label=_("指标 ID 列表"), child=serializers.IntegerField(), default=list)
         where = ConditionSerializer(label=_("过滤条件"), many=True, allow_empty=True, default=list)
         group_by = GroupBySerializer(label=_("聚合维度"), many=True, allow_empty=True, default=list)
         common_conditions = serializers.ListField(label=_("常用维度过滤"), default=list)
@@ -308,13 +303,6 @@ class GetCustomTsGraphConfig(Resource):
         "eq": "contains",
         "neq": "ncontains",
     }
-
-    @staticmethod
-    def _build_requested_metric_scopes(metrics: list[dict]) -> dict[str, set[str]]:
-        requested_metric_scopes = defaultdict(set)
-        for metric in metrics:
-            requested_metric_scopes[metric["name"]].add(metric.get("field_scope", ""))
-        return requested_metric_scopes
 
     @classmethod
     def time_or_no_compare(
@@ -600,7 +588,7 @@ class GetCustomTsGraphConfig(Resource):
 
     def perform_request(self, params: dict) -> dict:
         # 如果指标为空，则返回空列表
-        if not params["metrics"]:
+        if not params["metric_ids"]:
             return {"groups": []}
 
         is_apm_scenario = params.get("is_apm_scenario")
@@ -638,22 +626,20 @@ class GetCustomTsGraphConfig(Resource):
                 else:
                     dimension_names[dimension_name] = dim_config.get("alias", dimension_name)
 
-        # 通过 query_time_series_metric 精确获取指定指标
-        metric_names = [m["name"] for m in params["metrics"]]
+        # 通过 query_time_series_metric 精确获取指定指标（使用 field_id 精确匹配）
+        requested_metric_ids = set(params["metric_ids"])
         conditions = [
-            {"key": "name", "values": metric_names, "search_type": "exact"},
+            {"key": "field_id", "values": [str(mid) for mid in requested_metric_ids], "search_type": "exact"},
         ]
-        # 如果是 apm 场景，可能存在同名指标，需要乘以分组数量。后续可以考虑使用指标 id 过滤优化
         metric_result = api.metadata.query_time_series_metric(
             group_id=params["time_series_group_id"],
             page=1,
-            page_size=min(len(metric_names) * len(metadata_result), 100000),
+            page_size=-1, # 获取所有指标
             conditions=conditions,
         )
 
         # 构建指标列表
         metrics_list = []
-        requested_metric_scopes = self._build_requested_metric_scopes(params["metrics"])
 
         for metric_data in metric_result.get("metrics", []):
             metric_name = metric_data.get("name", "")
@@ -666,12 +652,6 @@ class GetCustomTsGraphConfig(Resource):
 
             # 收集指标的维度（排除隐藏的维度）
             dimensions = [dim_name for dim_name in metric_data.get("tag_list", []) if dim_name not in dimension_hidden]
-
-            requested_scopes = requested_metric_scopes.get(metric_name)
-            if not requested_scopes:
-                continue
-            if scope_name not in requested_scopes:
-                continue
 
             # 去除 scope_prefix 前缀
             if params.get("scope_prefix") and scope_name.startswith(params["scope_prefix"]):

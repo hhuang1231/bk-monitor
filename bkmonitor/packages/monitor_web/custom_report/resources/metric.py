@@ -664,7 +664,7 @@ class GetCustomTsFields(CustomTSScopeMixin, Resource):
     class RequestSerializer(BaseCustomTSSerializer):
         page = serializers.IntegerField(label=_("页码"), default=1, min_value=1, required=False)
         page_size = serializers.IntegerField(
-            label=_("每页数量"), default=20, min_value=1, max_value=1000, required=False
+            label=_("每页数量，-1 表示不分页"), default=20, min_value=-1, max_value=100000, required=False
         )
         conditions = serializers.DictField(label=_("搜索条件"), required=False, default=dict)
         condition_connector = serializers.ChoiceField(
@@ -970,18 +970,26 @@ class CreateOrUpdateGroupingRule(CustomTSScopeMixin, Resource):
         scope_id = serializers.IntegerField(label=_("分组 ID"), allow_null=True, required=False)
         name = serializers.CharField(label=_("分组名称"))
         auto_rules = serializers.ListField(label=_("自动分组的匹配规则列表"), default=list)
-        metric_ids = serializers.ListField(
-            label=_("该分组最终包含的指标 ID 列表"), child=serializers.IntegerField(), default=list
+        remove_ids = serializers.ListField(
+            label=_("需要移回默认分组的指标 ID 列表"),
+            child=serializers.IntegerField(),
+            required=False,
+            default=list,
+        )
+        update_ids = serializers.ListField(
+            label=_("需要移动到当前分组的指标 ID 列表"),
+            child=serializers.IntegerField(),
+            required=False,
+            default=list,
         )
 
-    def _merge_scope_ids(self, params: dict, scope_id: int) -> dict:
-        """合并 scope_ids 参数，避免冲突"""
-        query_filters = self.get_query_scope_filters(params)
-        scope_ids = query_filters.get("scope_ids", [])
-        if scope_id not in scope_ids:
-            scope_ids.append(scope_id)
-        query_filters["scope_ids"] = scope_ids
-        return query_filters
+        def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+            remove_ids = set(attrs.get("remove_ids", []))
+            update_ids = set(attrs.get("update_ids", []))
+            if remove_ids & update_ids:
+                raise serializers.ValidationError(_("`remove_ids` 与 `update_ids` 不能有重复的指标 ID"))
+
+            return attrs
 
     def perform_request(self, params: dict):
         scope_request_obj = ScopeCURequestDTO(
@@ -998,22 +1006,14 @@ class CreateOrUpdateGroupingRule(CustomTSScopeMixin, Resource):
             default_scope_name=self.get_default_scope_name(params), include_metrics=False
         )
 
-        # 查询分组信息（含指标，用于 diff）
-        scope_obj = scope_converter.query_time_series_scope(**self._merge_scope_ids(params, scope_cu_obj.id))[0]
-
-        origin_metric_ids: set[int] = {metric_obj.id for metric_obj in scope_obj.metric_list}
-        target_metric_ids: set[int] = set(params.get("metric_ids", []))
-        remove_metric_ids: set[int] = origin_metric_ids - target_metric_ids
-        add_metric_ids: set[int] = target_metric_ids - origin_metric_ids
-
         field_modify_service = FieldsModifyService(time_series_group_id=params["time_series_group_id"])
-        for metric_id in remove_metric_ids:
+        for metric_id in set(params["remove_ids"]):
             field_modify_service.add_metric(ModifyMetric(id=metric_id, scope_id=default_scope_obj.id))
-        for metric_id in add_metric_ids:
-            field_modify_service.add_metric(ModifyMetric(id=metric_id, scope_id=scope_obj.id))
+        for metric_id in set(params["update_ids"]):
+            field_modify_service.add_metric(ModifyMetric(id=metric_id, scope_id=scope_cu_obj.id))
         field_modify_service.apply_change()
 
-        return {"scope_id": scope_obj.id}
+        return {"scope_id": scope_cu_obj.id}
 
 
 class PreviewGroupingRule(CustomTSScopeMixin, Resource):

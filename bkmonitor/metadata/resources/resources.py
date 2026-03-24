@@ -1519,7 +1519,9 @@ class QueryTimeSeriesMetricResource(Resource):
         bk_tenant_id = TenantIdField(label="租户ID")
         group_id = serializers.IntegerField(required=True, label="自定义时序数据源ID")
         page = serializers.IntegerField(default=1, required=False, label="页数", min_value=1)
-        page_size = serializers.IntegerField(default=10, required=False, label="页长", min_value=1, max_value=100000)
+        page_size = serializers.IntegerField(
+            default=10, required=False, label="页长，-1 表示不分页", min_value=-1, max_value=100000
+        )
         conditions = serializers.ListField(
             child=QueryTimeSeriesMetricConditionSerializer(),
             required=False,
@@ -1570,7 +1572,7 @@ class QueryTimeSeriesMetricResource(Resource):
 
         # 分页处理
         total = query_set.count()
-        if page_size > 0:
+        if page_size != -1:
             offset = (page - 1) * page_size
             paginated_query_set = query_set[offset : offset + page_size]
         else:
